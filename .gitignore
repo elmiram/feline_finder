@@ -8,12 +8,13 @@ pnpm-debug.log*
 lerna-debug.log*
 
 node_modules
+/feline-finder-frontend/node_modules/
 dist
 dist-ssr
 *.local
 
 # Generated files
-feline-finder-frotend/package-lock.json
+feline-finder-frontend/package-lock.json
 
 # Editor directories and files
 .vscode/*
@@ -29,5 +30,4 @@ feline-finder-frotend/package-lock.json
 # Passwords and configs
 /backend/secrets.py
 /backend/api_exploration/surepet_json_extract.txt
-/feline-finder-frotend/node_modules/
 
