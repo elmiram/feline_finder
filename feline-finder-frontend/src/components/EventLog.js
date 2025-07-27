@@ -1,6 +1,6 @@
 import React from 'react';
 import {Home, TreeDeciduous, Eye, User} from 'lucide-react';
-import {formatRelativeTime} from '../utils/time';
+import {formatRelativeTime, formatEventTime} from '../utils/time';
 
 const EventLog = ({events}) => {
     if (!events || events.length === 0) {
@@ -30,10 +30,22 @@ const EventLog = ({events}) => {
             <ul className="space-y-2">
                 {events.map((e) => (
                     <li key={e.surepet_event_id}
-                        className="flex items-center justify-between text-sm p-2 bg-gray-50 rounded-md">
-                        <span className="flex items-center gap-2 text-gray-700">{getIcon(e)} {getText(e)}</span>
-                        <span className="text-gray-400"
-                              title={new Date(e.timestamp).toLocaleString()}>{formatRelativeTime(e.timestamp)}</span>
+                        className="flex items-center justify-between text-sm p-2 bg-gray-50 rounded-md"
+                        title={new Date(e.timestamp).toLocaleString()}>
+
+                        {/* Left-aligned content */}
+                        <span className="flex items-center gap-2 text-gray-700 truncate">
+                            {getIcon(e)}
+                            <span className="truncate">
+                                {getText(e)} at <span
+                                className="font-medium text-gray-800">{formatEventTime(e.timestamp)}</span>
+                            </span>
+                        </span>
+
+                        {/* Right-aligned content */}
+                        <span className="text-gray-500 flex-shrink-0 ml-4">
+                            {formatRelativeTime(e.timestamp)}
+                        </span>
                     </li>
                 ))}
             </ul>
