@@ -129,7 +129,7 @@ def get_latest_data_for_cats():
     if not conn: return None
     cats_data = {}
     cursor = conn.cursor()
-    cursor.execute("SELECT internal_cat_id, cat_name FROM cat_identities")
+    cursor.execute("SELECT internal_cat_id, cat_name FROM cat_identities WHERE active = 1")
     cats = cursor.fetchall()
     for cat in cats:
         internal_cat_id, cat_name = cat['internal_cat_id'], cat['cat_name']
@@ -205,6 +205,16 @@ def get_status():
 @app.route('/api/zones')
 def get_zones():
     return jsonify(KNOWN_ZONES)
+
+@app.route('/api/cats')
+def get_cats():
+    conn = create_connection()
+    if not conn: return jsonify({"error": "Database connection failed"}), 500
+    cursor = conn.cursor()
+    cursor.execute("SELECT cat_name FROM cat_identities ORDER BY cat_name")
+    names = [row['cat_name'] for row in cursor.fetchall()]
+    conn.close()
+    return jsonify(names)
 
 @app.route('/api/history/gps')
 def get_gps_history():

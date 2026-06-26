@@ -13,6 +13,7 @@ export default function App() {
     const [statusLoading, setStatusLoading] = useState(true);
     const [statusError, setStatusError] = useState(null);
     const [lastRefreshTime, setLastRefreshTime] = useState(null);
+    const [allCatNames, setAllCatNames] = useState([]);
 
     // State for auto-refresh controls
     const [autoRefresh, setAutoRefresh] = useState(true);
@@ -24,18 +25,22 @@ export default function App() {
             setStatusLoading(true);
             setStatusError(null);
             try {
-                const [statusRes, zonesRes] = await Promise.all([
+                const [statusRes, zonesRes, catsRes] = await Promise.all([
                     fetch(`${API_BASE_URL}/api/status`),
-                    fetch(`${API_BASE_URL}/api/zones`)
+                    fetch(`${API_BASE_URL}/api/zones`),
+                    fetch(`${API_BASE_URL}/api/cats`),
                 ]);
                 if (!statusRes.ok) throw new Error(`HTTP error! status: ${statusRes.status}`);
                 if (!zonesRes.ok) throw new Error(`HTTP error! status: ${zonesRes.status}`);
+                if (!catsRes.ok) throw new Error(`HTTP error! status: ${catsRes.status}`);
 
                 const statusData = await statusRes.json();
                 const zonesData = await zonesRes.json();
+                const catsData = await catsRes.json();
 
                 setCatsStatus(statusData);
                 setKnownZones(zonesData);
+                setAllCatNames(catsData);
                 setLastRefreshTime(new Date());
 
             } catch (e) {
@@ -117,7 +122,7 @@ export default function App() {
 
                 {activeView === 'history' && (
                     <HistoryView
-                        catNames={Object.keys(catsStatus)}
+                        catNames={allCatNames}
                         knownZones={knownZones}
                     />
                 )}
