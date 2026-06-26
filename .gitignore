@@ -34,3 +34,6 @@ feline-finder-frontend/package-lock.json
 /backend/config.py
 /backend/api_exploration/surepet_json_extract.txt
 
+# Local dev proxy (Mac Mini only — not for Pi)
+/feline-finder-frontend/src/setupProxy.js
+

@@ -101,6 +101,75 @@ def insert_surepet_user(conn, data):
     cursor.execute(sql, data)
     conn.commit()
 
+def get_internal_cat_id_by_name(conn, cat_name):
+    """Get the internal cat ID from a cat name."""
+    cursor = conn.cursor()
+    cursor.execute("SELECT internal_cat_id FROM cat_identities WHERE cat_name = ?", (cat_name,))
+    result = cursor.fetchone()
+    return result['internal_cat_id'] if result else None
+
+def get_tracker_history(conn):
+    """Returns per-cat tracker history (active and retired assignments)."""
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT ci.cat_name, ci.internal_cat_id,
+               ta.tractive_tracker_id, ta.assigned_date, ta.retired_date
+        FROM cat_identities ci
+        JOIN tracker_assignments ta ON ci.internal_cat_id = ta.internal_cat_id
+        ORDER BY ci.cat_name, ta.assigned_date DESC
+    """)
+    history = {}
+    for row in cursor.fetchall():
+        name = row['cat_name']
+        if name not in history:
+            history[name] = {'internal_cat_id': row['internal_cat_id'], 'trackers': []}
+        history[name]['trackers'].append({
+            'tracker_id': row['tractive_tracker_id'],
+            'assigned_date': row['assigned_date'],
+            'retired_date': row['retired_date'],
+            'active': row['retired_date'] is None
+        })
+    return history
+
+def retire_active_tracker(conn, internal_cat_id, retired_at=None):
+    """Set retired_date on all active trackers for a cat. Returns list of retired tracker IDs.
+    retired_at: datetime string override (e.g. when the cat actually lost the tracker)."""
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT tractive_tracker_id FROM tracker_assignments WHERE internal_cat_id = ? AND retired_date IS NULL",
+        (internal_cat_id,)
+    )
+    active = [row['tractive_tracker_id'] for row in cursor.fetchall()]
+    if active:
+        date_str = retired_at if retired_at else datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        cursor.execute(
+            "UPDATE tracker_assignments SET retired_date = ? WHERE internal_cat_id = ? AND retired_date IS NULL",
+            (date_str, internal_cat_id)
+        )
+        conn.commit()
+    return active
+
+def add_tracker_assignment(conn, internal_cat_id, tracker_id):
+    """Add a new active tracker assignment for a cat."""
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO tracker_assignments (internal_cat_id, tractive_tracker_id, assigned_date) VALUES (?, ?, ?)",
+        (internal_cat_id, tracker_id, datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+    )
+    conn.commit()
+
+def get_retired_tracker_gap_start(conn, internal_cat_id, tracker_id):
+    """Get the retired_date for a specific tracker — when the gap to backfill begins."""
+    cursor = conn.cursor()
+    cursor.execute(
+        """SELECT retired_date FROM tracker_assignments
+           WHERE internal_cat_id = ? AND tractive_tracker_id = ? AND retired_date IS NOT NULL
+           ORDER BY retired_date DESC LIMIT 1""",
+        (internal_cat_id, tracker_id)
+    )
+    result = cursor.fetchone()
+    return result['retired_date'] if result else None
+
 def initialize_identities_and_assignments(conn):
     """Populate the identities and assignments tables from CAT_CONFIG if they are empty."""
     cursor = conn.cursor()

@@ -5,13 +5,22 @@
 # It now uses DBSCAN for clustering to remove outliers before computing the territory polygon.
 
 import os
+import datetime
 import requests
 import numpy as np
-from sklearn.cluster import DBSCAN # New dependency for clustering
+from sklearn.cluster import DBSCAN
 from flask import Flask, jsonify, send_from_directory, request
 from flask_cors import CORS
 
-from db_utils import create_connection
+from db_utils import (
+    create_connection,
+    get_internal_cat_id_by_name,
+    get_tracker_history,
+    retire_active_tracker,
+    add_tracker_assignment,
+    get_retired_tracker_gap_start,
+)
+from tractive_backfill import run_backfill_in_background
 
 # --- Configuration ---
 # KNOWN_ZONES = {
@@ -250,6 +259,86 @@ def get_event_history():
     events = [{'time': r['timestamp'], 'source': r['event_source'], 'direction': r['direction'], 'user_id': r['user_id']} for r in cursor.fetchall()]
     conn.close()
     return jsonify(events)
+
+@app.route('/api/trackers')
+def get_trackers():
+    conn = create_connection()
+    if not conn: return jsonify({"error": "Database connection failed"}), 500
+    history = get_tracker_history(conn)
+    conn.close()
+    return jsonify(history)
+
+@app.route('/api/trackers/assign', methods=['POST'])
+def assign_tracker():
+    """Retire the current tracker for a cat, assign a new one, and kick off a full backfill.
+    Optional lost_date (YYYY-MM-DD) marks when the cat actually lost the old tracker —
+    it becomes the retired_date on the old assignment and the backfill start for the new one."""
+    data = request.get_json()
+    cat_name = data.get('cat_name')
+    new_tracker_id = data.get('tracker_id', '').strip().upper()
+    lost_date_str = data.get('lost_date')  # optional YYYY-MM-DD
+
+    if not cat_name or not new_tracker_id:
+        return jsonify({"error": "cat_name and tracker_id are required"}), 400
+
+    conn = create_connection()
+    if not conn: return jsonify({"error": "Database connection failed"}), 500
+
+    internal_cat_id = get_internal_cat_id_by_name(conn, cat_name)
+    if not internal_cat_id:
+        conn.close()
+        return jsonify({"error": f"Cat '{cat_name}' not found"}), 404
+
+    retired = retire_active_tracker(conn, internal_cat_id, retired_at=lost_date_str)
+    add_tracker_assignment(conn, internal_cat_id, new_tracker_id)
+    conn.close()
+
+    start_from = datetime.datetime.fromisoformat(lost_date_str) if lost_date_str else None
+    run_backfill_in_background(new_tracker_id, internal_cat_id, start_from=start_from)
+
+    return jsonify({
+        "success": True,
+        "retired": retired,
+        "new_tracker_id": new_tracker_id,
+        "lost_date": lost_date_str,
+        "message": "Tracker assigned. Historical backfill running in background."
+    })
+
+@app.route('/api/trackers/reactivate', methods=['POST'])
+def reactivate_tracker():
+    """Re-activate a previously retired tracker, backfilling only the gap since it was retired.
+    Optional lost_date (YYYY-MM-DD) overrides the gap start (useful when the DB retired_date is wrong)."""
+    data = request.get_json()
+    cat_name = data.get('cat_name')
+    tracker_id = data.get('tracker_id', '').strip().upper()
+    lost_date_str = data.get('lost_date')  # optional YYYY-MM-DD override
+
+    if not cat_name or not tracker_id:
+        return jsonify({"error": "cat_name and tracker_id are required"}), 400
+
+    conn = create_connection()
+    if not conn: return jsonify({"error": "Database connection failed"}), 500
+
+    internal_cat_id = get_internal_cat_id_by_name(conn, cat_name)
+    if not internal_cat_id:
+        conn.close()
+        return jsonify({"error": f"Cat '{cat_name}' not found"}), 404
+
+    gap_start_str = lost_date_str or get_retired_tracker_gap_start(conn, internal_cat_id, tracker_id)
+    retired = retire_active_tracker(conn, internal_cat_id)
+    add_tracker_assignment(conn, internal_cat_id, tracker_id)
+    conn.close()
+
+    start_from = datetime.datetime.fromisoformat(gap_start_str) if gap_start_str else None
+    run_backfill_in_background(tracker_id, internal_cat_id, start_from=start_from)
+
+    return jsonify({
+        "success": True,
+        "retired": retired,
+        "reactivated_tracker_id": tracker_id,
+        "gap_start": gap_start_str,
+        "message": "Tracker reactivated. Gap backfill running in background."
+    })
 
 @app.route('/', defaults={'path': ''})
 @app.route('/<path:path>')
