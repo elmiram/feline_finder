@@ -20,7 +20,7 @@ from db_utils import (
     insert_surepet_user,
 )
 
-from secrets import (SUREPET_EMAIL,
+from config import (SUREPET_EMAIL,
                      SUREPET_PASSWORD)
 
 

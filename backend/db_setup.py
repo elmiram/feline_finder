@@ -8,7 +8,7 @@
 import sqlite3
 from sqlite3 import Error
 
-from secrets import (DATABASE_FILE)
+from config import (DATABASE_FILE)
 
 def create_connection(db_file):
     """ Create a database connection to a SQLite database """

@@ -43,7 +43,7 @@ import datetime as dt
 from collections import defaultdict, namedtuple
 from zoneinfo import ZoneInfo
 
-from secrets import KNOWN_ZONES
+from config import KNOWN_ZONES
 
 # ----------------- CONFIG -----------------
 DB_PATH = os.getenv("CAT_DB_PATH", "cat_tracker.db")

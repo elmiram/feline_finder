@@ -27,7 +27,10 @@ feline-finder-frontend/package-lock.json
 *.sln
 *.sw?
 
+# Claude Code
+.claude/
+
 # Passwords and configs
-/backend/secrets.py
+/backend/config.py
 /backend/api_exploration/surepet_json_extract.txt
 

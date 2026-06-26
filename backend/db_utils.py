@@ -10,7 +10,7 @@ import sqlite3
 import datetime
 from sqlite3 import Error
 
-from secrets import DATABASE_FILE, CAT_CONFIG
+from config import DATABASE_FILE, CAT_CONFIG
 
 # --- Database Utility Functions ---
 

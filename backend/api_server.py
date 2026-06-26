@@ -19,7 +19,7 @@ from db_utils import create_connection
 #         [lat1, lon1], [lat2, lon2], ..., [latN, lonN]
 #     ],
 # }
-from secrets import KNOWN_ZONES
+from config import KNOWN_ZONES
 
 # --- New Helper Functions ---
 

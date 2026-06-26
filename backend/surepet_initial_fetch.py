@@ -23,7 +23,7 @@ from db_utils import (
     insert_surepet_user, # Added user insert function
 )
 
-from secrets import (SUREPET_EMAIL,
+from config import (SUREPET_EMAIL,
                      SUREPET_PASSWORD)
 
 async def main():

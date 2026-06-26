@@ -23,7 +23,7 @@ from db_utils import (
     insert_tractive_gps_position,
 )
 
-from secrets import (TRACTIVE_EMAIL,
+from config import (TRACTIVE_EMAIL,
                      TRACTIVE_PASSWORD,)
 
 # --- Configuration ---
