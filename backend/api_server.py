@@ -112,7 +112,7 @@ def get_human_readable_address(lat, lon):
 
 # --- Flask App Setup & Existing Functions ---
 
-app = Flask(__name__, static_folder='feline-finder-frontend/build')
+app = Flask(__name__, static_folder='../feline-finder-frontend/build')
 CORS(app)
 
 def get_latest_data_for_cats():
