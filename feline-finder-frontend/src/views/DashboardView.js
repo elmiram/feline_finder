@@ -25,7 +25,7 @@ const DashboardView = ({catsStatus, statusLoading, statusError, lastRefreshTime,
                         <div key={cat.name} className="flex flex-col gap-8">
                             <StatusCard cat={cat} lastRefresh={lastRefreshTime}/>
                             <div className="bg-white rounded-2xl shadow-lg p-6">
-                                <EventLog events={cat.recent_events}/>
+                                <EventLog events={cat.recent_events} zoneChanges={cat.recent_zone_changes}/>
                             </div>
                         </div>
                     ))}

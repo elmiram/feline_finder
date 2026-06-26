@@ -1,12 +1,8 @@
 import React from 'react';
-import {Home, TreeDeciduous, Eye, User} from 'lucide-react';
+import {Home, TreeDeciduous, Eye, User, MapPin} from 'lucide-react';
 import {formatRelativeTime, formatEventTime} from '../utils/time';
 
-const EventLog = ({events}) => {
-    if (!events || events.length === 0) {
-        return <div className="text-center text-sm text-gray-400 py-4">No recent events</div>;
-    }
-
+const EventLog = ({events, zoneChanges}) => {
     const getIcon = (e) => {
         const source = e.source ?? e.event_source;
         if (source === 0) return e.direction === 1 ? <Home className="w-4 h-4 text-blue-500"/> :
@@ -24,31 +20,61 @@ const EventLog = ({events}) => {
         return 'Unknown Event';
     };
 
+    const hasEvents = events && events.length > 0;
+    const hasZoneChanges = zoneChanges && zoneChanges.length > 0;
+
+    if (!hasEvents && !hasZoneChanges) {
+        return <div className="text-center text-sm text-gray-400 py-4">No recent events</div>;
+    }
+
     return (
-        <div className="mt-4">
-            <h4 className="font-bold text-gray-700 mb-2 text-center">Recent Activity</h4>
-            <ul className="space-y-2">
-                {events.map((e) => (
-                    <li key={e.surepet_event_id}
-                        className="flex items-center justify-between text-sm p-2 bg-gray-50 rounded-md"
-                        title={new Date(e.timestamp).toLocaleString()}>
+        <div className="mt-4 space-y-4">
+            {hasEvents && (
+                <div>
+                    <h4 className="font-bold text-gray-700 mb-2 text-center">Recent Activity</h4>
+                    <ul className="space-y-2">
+                        {events.map((e) => (
+                            <li key={e.surepet_event_id}
+                                className="flex items-center justify-between text-sm p-2 bg-gray-50 rounded-md"
+                                title={new Date(e.timestamp).toLocaleString()}>
+                                <span className="flex items-center gap-2 text-gray-700 truncate">
+                                    {getIcon(e)}
+                                    <span className="truncate">
+                                        {getText(e)} at <span className="font-medium text-gray-800">{formatEventTime(e.timestamp)}</span>
+                                    </span>
+                                </span>
+                                <span className="text-gray-500 flex-shrink-0 ml-4">
+                                    {formatRelativeTime(e.timestamp)}
+                                </span>
+                            </li>
+                        ))}
+                    </ul>
+                </div>
+            )}
 
-                        {/* Left-aligned content */}
-                        <span className="flex items-center gap-2 text-gray-700 truncate">
-                            {getIcon(e)}
-                            <span className="truncate">
-                                {getText(e)} at <span
-                                className="font-medium text-gray-800">{formatEventTime(e.timestamp)}</span>
-                            </span>
-                        </span>
-
-                        {/* Right-aligned content */}
-                        <span className="text-gray-500 flex-shrink-0 ml-4">
-                            {formatRelativeTime(e.timestamp)}
-                        </span>
-                    </li>
-                ))}
-            </ul>
+            {hasZoneChanges && (
+                <div>
+                    <h4 className="font-bold text-gray-700 mb-2 text-center">Recent Zone Changes</h4>
+                    <ul className="space-y-2">
+                        {zoneChanges.map((z, i) => (
+                            <li key={i}
+                                className="flex items-center justify-between text-sm p-2 bg-gray-50 rounded-md"
+                                title={new Date(z.entered_at).toLocaleString()}>
+                                <span className="flex items-center gap-2 text-gray-700 truncate">
+                                    <MapPin className="w-4 h-4 text-indigo-400 flex-shrink-0"/>
+                                    <span className="truncate">
+                                        Entered <span className="font-medium text-gray-800">{z.to_zone ?? 'unknown area'}</span>
+                                        {z.from_zone && <span className="text-gray-400"> from {z.from_zone}</span>}
+                                    </span>
+                                </span>
+                                <span className="text-gray-500 flex-shrink-0 ml-4">
+                                    {formatRelativeTime(z.entered_at)}
+                                </span>
+                            </li>
+                        ))}
+                    </ul>
+                </div>
+            )}
         </div>
     );
 };

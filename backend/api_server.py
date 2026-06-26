@@ -102,6 +102,37 @@ def is_point_in_polygon(point, polygon):
         p1lat, p1lon = p2lat, p2lon
     return inside
 
+def get_zone_for_point(lat, lon):
+    """Returns the zone name for a point, or None if outside all known zones."""
+    for zone_name, polygon in KNOWN_ZONES.items():
+        if is_point_in_polygon((lat, lon), polygon):
+            return zone_name
+    return None
+
+def get_recent_zone_changes(positions, limit=5):
+    """
+    Given GPS positions (newest first), return the most recent zone transitions.
+    Each entry: {to_zone, from_zone, entered_at}
+    """
+    changes = []
+    prev_zone = None
+    prev_time = None
+
+    for pos in positions:
+        current_zone = get_zone_for_point(pos['lat'], pos['lon'])
+        if prev_zone is not None and current_zone != prev_zone:
+            changes.append({
+                'to_zone': prev_zone,
+                'from_zone': current_zone,
+                'entered_at': prev_time,
+            })
+            if len(changes) >= limit:
+                break
+        prev_zone = current_zone
+        prev_time = pos['time']
+
+    return changes
+
 def get_human_readable_address(lat, lon):
     try:
         headers = {'User-Agent': 'FelineFinder/1.0 (Personal Project)'}
@@ -142,6 +173,8 @@ def get_latest_data_for_cats():
         cats_data[cat_name]['tractive_status'] = cursor.fetchone()
         cursor.execute("SELECT * FROM tractive_gps_positions WHERE internal_cat_id = ? ORDER BY timestamp DESC LIMIT 1", (internal_cat_id,))
         cats_data[cat_name]['tractive_position'] = cursor.fetchone()
+        cursor.execute("SELECT latitude, longitude, timestamp FROM tractive_gps_positions WHERE internal_cat_id = ? ORDER BY timestamp DESC LIMIT 500", (internal_cat_id,))
+        cats_data[cat_name]['recent_positions'] = [{'lat': r['latitude'], 'lon': r['longitude'], 'time': r['timestamp']} for r in cursor.fetchall()]
     conn.close()
     return cats_data
 
@@ -184,6 +217,7 @@ def run_confidence_engine(cats_data):
                 address = get_human_readable_address(pos['latitude'], pos['longitude'])
                 if address:
                     location_detail = f"Last seen {address}"
+        zone_changes = get_recent_zone_changes(data.get('recent_positions', []))
         final_status[cat_name] = {
             "name": cat_name, "status": status, "confidence": confidence,
             "evidence": evidence, "location": location, "location_detail": location_detail,
@@ -191,7 +225,8 @@ def run_confidence_engine(cats_data):
             "surepet_update_time": flap['timestamp'] if flap else None,
             "battery_level": hw['battery_level'] if hw else None,
             "is_charging": hw['is_charging'] == 1 if hw else None,
-            "recent_events": data.get('recent_events', [])
+            "recent_events": data.get('recent_events', []),
+            "recent_zone_changes": zone_changes,
         }
     return final_status
 
