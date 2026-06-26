@@ -20,8 +20,9 @@ Stores the primary, permanent profile for each cat.
 | Column Name      | Data Type | Constraints              | Description                                      |
 |------------------|-----------|--------------------------|--------------------------------------------------|
 | internal_cat_id  | INTEGER   | PRIMARY KEY AUTOINCREMENT| A unique, auto-generated ID for each cat.        |
-| cat_name         | TEXT      | NOT NULL UNIQUE          | The human-readable name of the cat (e.g., "Trixie"). |
+| cat_name         | TEXT      | NOT NULL UNIQUE          | The human-readable name of the cat (e.g., "Arthur"). |
 | surepet_pet_id   | INTEGER   | UNIQUE                   | The unique ID from the SurePet system.           |
+| active           | INTEGER   | NOT NULL DEFAULT 1       | 1 = shown on live dashboard; 0 = hidden (e.g. deceased). Historical data is always preserved. |
 
 ---
 
@@ -112,15 +113,15 @@ Stores information about SurePet users.
 
 ## Size Estimates
 
-Assuming each of your three cats is pinging GPS for 10 hours per day (every 10 seconds):
+Assuming each active cat is pinging GPS for 10 hours per day (every 10 seconds):
 
 - **Pings per cat per day**:  
   `10 hours * 3600 seconds/hour / 10 = 3,600`
 
-- **Rows per year for 3 cats**:  
-  `3,600 pings/day * 365 days/year * 3 cats ≈ 3.94 million`
+- **Rows per year for 2 active cats**:  
+  `3,600 pings/day * 365 days/year * 2 cats ≈ 2.63 million`
 
 - **Estimated storage**:  
-  `3.94 million rows * 64 bytes ≈ 252 MB`
+  `2.63 million rows * 64 bytes ≈ 168 MB`
 
-Thus, even at high activity levels, one year of GPS data for 3 cats fits within 250–300 MB—well within the capacity of a standard SD card on a Raspberry Pi.
+Thus, even at high activity levels, one year of GPS data fits well within the capacity of a standard SD card on a Raspberry Pi.

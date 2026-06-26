@@ -8,11 +8,12 @@ FelineFinder integrates data from Tractive GPS trackers and SurePet smart cat fl
 
 ## ✨ Features
 
--   **Live Dashboard**: At-a-glance status for each cat ("At Home", "Outside", "In Driveway Zone"), including battery levels and recent activity.
+-   **Live Dashboard**: At-a-glance status for each cat ("At Home", "Outside", "In Driveway Zone"), including battery levels, recent flap events, and recent zone changes.
 -   **Confidence Engine**: A smart backend engine that analyzes conflicting data from multiple sources to determine the most probable, accurate status.
 -   **Historical Analysis**: An interactive map view to explore your cat's GPS history and territory over custom time windows.
--   **Event Log**: A detailed, real-time log of cat flap entries/exits, manual location settings, and more.
+-   **Event Log**: A real-time log of cat flap entries/exits, manual location settings, and GPS zone transitions.
 -   **Zone Mapping**: Define custom zones (e.g., "Garden", "Neighbor's Yard") and see them visualized on the map.
+-   **Tracker Management**: A Settings tab for reassigning a new tracker ID when a collar is lost or replaced. Automatically backfills historical GPS data in the background. Supports re-activating a recovered tracker with gap-only backfill.
 -   **Self-Hosted & Private**: All your data is stored locally in a SQLite database. No reliance on third-party cloud services for data aggregation.
 -   **Robust & Autonomous**: Core components run as auto-restarting system services for maximum uptime.
 
