@@ -20,7 +20,7 @@ const DashboardView = ({catsStatus, statusLoading, statusError, lastRefreshTime,
                 )}
             </div>
             {statusLoading ? <LoadingSpinner/> : statusError ? <ErrorDisplay message={statusError}/> : (
-                <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-8">
+                <div className={`grid grid-cols-1 gap-8 ${Object.values(catsStatus).length >= 3 ? 'lg:grid-cols-2 xl:grid-cols-3' : Object.values(catsStatus).length === 2 ? 'lg:grid-cols-2' : ''}`}>
                     {Object.values(catsStatus).map(cat => (
                         <div key={cat.name} className="flex flex-col gap-8">
                             <StatusCard cat={cat} lastRefresh={lastRefreshTime}/>
