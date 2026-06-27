@@ -83,7 +83,12 @@ async def backfill_single_tracker(tracker_id, internal_cat_id, start_from=None):
                                 point['time'],
                                 point['latlong'][0],
                                 point['latlong'][1],
-                                point['pos_uncertainty']
+                                point.get('pos_uncertainty'),
+                                point.get('speed'),
+                                point.get('alt'),
+                                point.get('pos_uncertainty'),
+                                point.get('sensor_used'),
+                                point.get('course'),
                             )
                             insert_tractive_gps_position(conn, gps_data)
                             count += 1

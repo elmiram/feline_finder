@@ -95,14 +95,18 @@ async def fetch_and_store_tractive_updates():
                 if history:
                     point_count = 0
                     for segment in history:
-                        # CORRECTED: Added missing colon on the next line
                         for point in segment:
                             gps_data = (
                                 internal_cat_id,
                                 point['time'],
                                 point['latlong'][0],
                                 point['latlong'][1],
-                                point['pos_uncertainty']
+                                point.get('pos_uncertainty'),
+                                point.get('speed'),
+                                point.get('alt'),
+                                point.get('pos_uncertainty'),
+                                point.get('sensor_used'),
+                                point.get('course'),
                             )
                             insert_tractive_gps_position(conn, gps_data)
                             point_count += 1

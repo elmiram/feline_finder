@@ -64,25 +64,32 @@ def insert_tractive_hw_status(conn, data):
     conn.commit()
 
 def insert_tractive_gps_position(conn, data):
-    """Insert a new Tractive GPS position record, avoiding duplicates."""
-    cursor = conn.cursor()    
-    # data[1] is the integer timestamp from the API. Convert it.
-    timestamp_dt = datetime.datetime.fromtimestamp(data[1])
+    """Insert a new Tractive GPS position record, avoiding duplicates.
 
-    # Now use the datetime object for formatting.
+    data tuple: (internal_cat_id, unix_timestamp, lat, lon, accuracy,
+                 speed, alt, pos_uncertainty, sensor_used, course)
+    """
+    cursor = conn.cursor()
+    timestamp_dt = datetime.datetime.fromtimestamp(data[1])
     timestamp_str = timestamp_dt.strftime('%Y-%m-%d %H:%M:%S')
 
     cursor.execute("SELECT 1 FROM tractive_gps_positions WHERE internal_cat_id = ? AND timestamp = ?", (data[0], timestamp_str))
     if cursor.fetchone():
-        # Added this print statement for debugging purposes.
         print(f"  -> Skipping duplicate GPS point for cat_id {data[0]} at {timestamp_str}")
         return
-    
-    # Use the formatted string timestamp for insertion to ensure consistency.
-    data_to_insert = (data[0], timestamp_str, data[2], data[3], data[4])
-    sql = '''INSERT INTO tractive_gps_positions(internal_cat_id, timestamp, latitude, longitude, accuracy)
-             VALUES(?,?,?,?,?)'''
-    cursor.execute(sql, data_to_insert)
+
+    speed         = data[5] if len(data) > 5 else None
+    alt           = data[6] if len(data) > 6 else None
+    pos_uncert    = data[7] if len(data) > 7 else None
+    sensor_used   = data[8] if len(data) > 8 else None
+    course        = data[9] if len(data) > 9 else None
+
+    sql = '''INSERT INTO tractive_gps_positions
+             (internal_cat_id, timestamp, latitude, longitude, accuracy,
+              speed, alt, pos_uncertainty, sensor_used, course)
+             VALUES(?,?,?,?,?,?,?,?,?,?)'''
+    cursor.execute(sql, (data[0], timestamp_str, data[2], data[3], data[4],
+                         speed, alt, pos_uncert, sensor_used, course))
     conn.commit()
 
 def insert_surepet_event(conn, data):

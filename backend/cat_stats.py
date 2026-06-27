@@ -72,6 +72,7 @@ def print_stats(conn, cat_id, cat_name):
     print(f"  {cat_name.upper()}")
     print(f"{'═'*55}")
 
+    # TODO: filter sensor_used = 'GPS' once backfill_extended_fields.py has populated that column
     c.execute("SELECT latitude, longitude, timestamp FROM tractive_gps_positions WHERE internal_cat_id=? ORDER BY timestamp", (cat_id,))
     rows = c.fetchall()
     if not rows:
@@ -97,7 +98,7 @@ def print_stats(conn, cat_id, cat_name):
     print(f"\n  Total distance:    {dist/1000:.1f} km")
     print(f"    How: haversine between consecutive GPS pings, summed. Jumps >500m discarded as noise.")
 
-    # Farthest point
+    # Farthest point — TODO: also filter sensor_used = 'GPS' once backfill_extended_fields.py is done
     farthest_dist, farthest_pt, farthest_ts = 0, None, None
     for (lat, lon), ts in zip(pts, timestamps):
         d = haversine(home_lat, home_lon, lat, lon)
