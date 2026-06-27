@@ -103,9 +103,13 @@ def store_day(conn, internal_cat_id, date_str, activity, sleep):
     if activity:
         active_minutes = activity.get('progress', {}).get('achieved_minutes')
         hourly_dist    = activity.get('hourly_distribution', [])
-        dist = activity.get('activity_distribution', {})
-        resting_hours  = dist.get('resting', {}).get('current')
-        calories       = dist.get('calories', {}).get('current')
+        dist_list = activity.get('activity_distribution', [])
+        if isinstance(dist_list, list):
+            dist_map = {item.get('type'): item for item in dist_list if isinstance(item, dict)}
+        else:
+            dist_map = dist_list if isinstance(dist_list, dict) else {}
+        resting_hours = dist_map.get('resting', {}).get('current')
+        calories      = dist_map.get('calories', {}).get('current')
 
     min_day_sleep   = None
     min_night_sleep = None
