@@ -1,133 +1,77 @@
 # api_test.py
 #
-# Description:
-# This script is a proof-of-concept to test the connection to the Tractive
-# and SurePet APIs using community-developed Python libraries.
-#
-# It will:
-# 1. Authenticate with both services using your credentials.
-# 2. Fetch a list of your registered trackers (Tractive) and pets (SurePet).
-# 3. Print the most recent status data for the first tracker and pet found.
-#
-# Installation:
-# You must install the required libraries before running this script.
-# pip install aiotractive surepy
+# Explores Tractive API data fields we're not yet storing.
+# Run from the backend/ directory:
+#   ~/elya-env/bin/python3 api_exploration/api_test.py
 
 import asyncio
+import sys
+import os
+import traceback
 from datetime import datetime
-
 from pprint import pprint
 
-# --- Tractive Integration (using aiotractive) ---
-from aiotractive import Tractive
+import aiohttp
 
-# --- SurePet Integration ---
-from surepy import Surepy
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+from config import TRACTIVE_EMAIL, TRACTIVE_PASSWORD
 
-from backend.secrets import TRACTIVE_EMAIL, TRACTIVE_PASSWORD, SUREPET_EMAIL, SUREPET_PASSWORD
+from aiotractive import Tractive  # installed in Pi venv
+
+APS_BASE = "https://aps-api.tractive.com/api/1"
+GRAPH_BASE = "https://graph.tractive.com/4"
+CLIENT_ID = "625e533dc3c3b41c28a669f0"
 
 
-async def test_tractive_api():
-    """
-    Connects to the Tractive API, fetches trackers, and prints their status.
-    This version is updated for the 'aiotractive' library.
-    """
-    print("--- Testing Tractive API ---")
-    try:
-        # Use 'async with' to handle login and session closing automatically.
-        async with Tractive(TRACTIVE_EMAIL, TRACTIVE_PASSWORD) as client:
-            await client.authenticate()
-            print("Tractive: Successfully authenticated.")
+async def aps_get(session, pet_id, endpoint, auth_headers):
+    url = f"{APS_BASE}/pet/{pet_id}/{endpoint}"
+    async with session.get(url, headers=auth_headers) as resp:
+        print(f"  GET {url}  →  {resp.status}")
+        if resp.status == 200:
+            return await resp.json()
+        return await resp.text()
 
-            # Get all trackable objects (trackers)
+
+async def explore():
+    async with Tractive(TRACTIVE_EMAIL, TRACTIVE_PASSWORD) as client:
+        await client.authenticate()
+        auth_headers = await client._api.auth_headers()
+        auth_headers["x-tractive-client"] = CLIENT_ID
+        print("Authenticated.\n")
+
+        pets = await client.trackable_objects()
+        print(f"Found {len(pets)} pet(s).\n")
+
+        async with aiohttp.ClientSession() as session:
+            for pet in pets:
+                details = await pet.details()
+                name = details.get('details', {}).get('name', pet._id)
+                print(f"{'='*60}")
+                print(f"PET: {name}  (id={pet._id})")
+                print(f"{'='*60}\n")
+
+                for ep in ["health/overview", "activity/summary", "wellness", "activity", "sleep"]:
+                    try:
+                        result = await aps_get(session, pet._id, ep, auth_headers)
+                        pprint(result, indent=2)
+                    except Exception as e:
+                        print(f"    error: {e}")
+                    print()
+
+        # ── Sample position entry ─────────────────────────────────────────
+        print("\n=== Sample position fields (last 24h) ===")
+        try:
             trackers = await client.trackers()
-            if not trackers:
-                print("Tractive: No trackers found on this account.")
-                return
-
-            print(f"Tractive: Found {len(trackers)} tracker(s).")
-
-
-
-
-            # Get details for the first tracker
-            first_tracker = trackers[1]
-            print(f"Tractive: Found first tracker.")
-            details = await first_tracker.details() # Includes device capabilities, battery status(not level), charging state and so on
-            hw = await first_tracker.hw_info() # Includes battery level, firmware version, model and so on
-            position = await first_tracker.pos_report() 
-            print(f"\n--- Details for Tracker:", details)
-
-            # Hardware status and position are attributes on the trackable object
-            print(f"  - HW:", hw)
-            
-            print(f"  - position: ", position)
-            
-            cats = await client.trackable_objects()
-        
-            # Retrieve details
-            #cat = await cats[0].details() 
-            #print("first cat", cat)
-            
             now = datetime.now().timestamp()
-            time_from = now - 3600 * 2
-            time_to = now
-            positions = await first_tracker.positions(time_from, time_to, 'json_segments')
-            print(positions)
-
-
-    except Exception as e:
-        print(f"An unexpected error occurred with Tractive: {e}")
-    finally:
-        print("-" * 28 + "\n")
-
-
-async def test_surepet_api():
-    """
-    Connects to the SurePet API, fetches pets, and prints their status.
-    This version is updated for the latest 'surepy' library API.
-    """
-    print("--- Testing SurePet API ---")
-    sp = None
-    try:
-        # Initialize the client directly.
-        sp = Surepy(SUREPET_EMAIL, SUREPET_PASSWORD)
-        print("SurePet: Successfully authenticated.")
-
-        # list with all pets
-        pets: List[Pet] = await sp.get_pets()
-        for pet in pets:
-            print(f"\n\n{pet.name}: {pet.state} | {pet.location}\n")
-            pprint(pet.raw_data())
-
-        print(f"\n\n - - - - - - - - - - - - - - - - - - - -\n\n")
-
-        # all entities as id-indexed dict
-        entities: Dict[int, SurepyEntity] = await sp.get_entities()
-
-        # list with alldevices
-        devices: List[SurepyDevice] = await sp.get_devices()
-        for device in devices:
-            print(f"{device.name = } | {device.serial = } | {device.battery_level = }")
-            print(f"{device.type = } | {device.unique_id = } | {device.id = }")
-            print(f"{entities[device.parent_id].full_name = } | {entities[device.parent_id] = }\n")
-
-
-    except Exception as e:
-        print(f"An unexpected error occurred with SurePet: {e}")
-    finally:
-        # The Surepy object does not need an explicit close method in this context.
-        print("-" * 27 + "\n")
-
-
-async def main():
-    """
-    Main function to run both API tests.
-    """
-    await test_tractive_api()
-    #await test_surepet_api()
+            for t in trackers:
+                positions = await t.positions(now - 86400, now, 'json_segments')
+                if positions:
+                    print(f"Tracker {t._id} — sample position:")
+                    pprint(positions[0], indent=2)
+                    break
+        except Exception:
+            traceback.print_exc()
 
 
 if __name__ == "__main__":
-    # Python's asyncio is used to run the asynchronous functions
-    asyncio.run(main())
+    asyncio.run(explore())
