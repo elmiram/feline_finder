@@ -9,9 +9,9 @@ const BatteryStatus = ({level, isCharging}) => {
     const chargingColor = 'text-blue-600';
 
     return (
-        <div className={`flex items-center space-x-1.5 text-sm font-medium ${isCharging ? chargingColor : color}`}>
-            <Battery className="w-5 h-5"/>
-            <span>{level}%{isCharging ? ' (Charging)' : ''}</span>
+        <div className={`flex items-center space-x-1 sm:space-x-1.5 font-medium flex-shrink-0 ${isCharging ? chargingColor : color}`}>
+            <Battery className="w-3 h-3 sm:w-5 sm:h-5"/>
+            <span className="text-xs sm:text-sm">{level}%<span className="hidden sm:inline">{isCharging ? ' (Charging)' : ''}</span></span>
         </div>
     );
 };
