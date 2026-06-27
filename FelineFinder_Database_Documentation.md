@@ -60,18 +60,84 @@ Stores periodic hardware status reports from each Tractive tracker.
 
 Stores the historical GPS data from Tractive.
 
-| Column Name    | Data Type | Constraints               | Description                                      |
-|----------------|-----------|---------------------------|--------------------------------------------------|
-| position_id    | INTEGER   | PRIMARY KEY AUTOINCREMENT | A unique ID for each GPS record.                |
-| internal_cat_id| INTEGER   | NOT NULL                  | Foreign key to `cat_identities.internal_cat_id`. |
-| timestamp      | DATETIME  | NOT NULL                  | Timestamp of the GPS reading.                    |
-| latitude       | REAL      | NOT NULL                  | Latitude coordinate.                             |
-| longitude      | REAL      | NOT NULL                  | Longitude coordinate.                            |
-| accuracy       | REAL      |                           | Accuracy in meters.                              |
+| Column Name      | Data Type | Constraints               | Description                                                    |
+|------------------|-----------|---------------------------|----------------------------------------------------------------|
+| position_id      | INTEGER   | PRIMARY KEY AUTOINCREMENT | A unique ID for each GPS record.                              |
+| internal_cat_id  | INTEGER   | NOT NULL                  | Foreign key to `cat_identities.internal_cat_id`.              |
+| timestamp        | DATETIME  | NOT NULL                  | Timestamp of the GPS reading.                                  |
+| latitude         | REAL      | NOT NULL                  | Latitude coordinate.                                           |
+| longitude        | REAL      | NOT NULL                  | Longitude coordinate.                                          |
+| accuracy         | REAL      |                           | GPS accuracy radius in metres (legacy column, same as pos_uncertainty). |
+| speed            | REAL      |                           | Instantaneous speed in m/s from tracker firmware (may be NULL). |
+| alt              | INTEGER   |                           | GPS altitude in metres.                                        |
+| pos_uncertainty  | INTEGER   |                           | GPS accuracy radius in metres. Filter to ≤ 50m for precision queries. |
+| sensor_used      | TEXT      |                           | `GPS` or `KNOWN_WIFI`. WiFi positions are cell-tower-level (100–500m); filter `sensor_used = 'GPS'` for territory/distance calculations. |
+| course           | REAL      |                           | Heading/direction of travel in degrees (may be NULL).          |
+
+**Note**: `speed`, `alt`, `pos_uncertainty`, `sensor_used`, and `course` were added June 2026. Rows collected before the migration have NULL in these columns; `backfill_extended_fields.py` retroactively populates them for active-tracker periods.
 
 ---
 
-## 5. `surepet_events`
+## 5. `tractive_health_daily`
+
+Day-level summary of activity and sleep for fast dashboard queries and trend charts. Populated by `health_collector.py` (daily at 06:00) and `health_backfill.py` (historical).
+
+| Column Name        | Data Type | Constraints               | Description                                                   |
+|--------------------|-----------|---------------------------|---------------------------------------------------------------|
+| id                 | INTEGER   | PRIMARY KEY AUTOINCREMENT | Unique row ID.                                                |
+| internal_cat_id    | INTEGER   | NOT NULL                  | Foreign key to `cat_identities.internal_cat_id`.             |
+| date               | TEXT      | NOT NULL                  | Local date in `YYYY-MM-DD` format.                            |
+| active_minutes     | INTEGER   |                           | Total active minutes (`progress.achieved_minutes`).           |
+| resting_hours      | REAL      |                           | Resting time in **hours** (`activity_distribution[resting].current`). |
+| calories           | REAL      |                           | Estimated calories burned.                                    |
+| minutes_day_sleep  | INTEGER   |                           | Day-sleep minutes from sleep overview.                        |
+| minutes_night_sleep| INTEGER   |                           | Night-sleep minutes from sleep overview.                      |
+| minutes_calm       | INTEGER   |                           | Calm/other minutes from sleep overview.                       |
+| UNIQUE             |           | (internal_cat_id, date)   | One row per cat per day.                                      |
+
+---
+
+## 6. `tractive_hourly_activity`
+
+One row per cat × day × hour; enables time-of-day analysis directly in SQL.
+
+| Column Name     | Data Type | Constraints               | Description                                         |
+|-----------------|-----------|---------------------------|-----------------------------------------------------|
+| id              | INTEGER   | PRIMARY KEY AUTOINCREMENT | Unique row ID.                                      |
+| internal_cat_id | INTEGER   | NOT NULL                  | Foreign key to `cat_identities.internal_cat_id`.   |
+| date            | TEXT      | NOT NULL                  | Local date in `YYYY-MM-DD` format.                  |
+| hour            | INTEGER   | NOT NULL                  | Clock hour 0–23 (0 = midnight).                     |
+| active_minutes  | INTEGER   |                           | Active minutes in this hour (from hourly_distribution). |
+| UNIQUE          |           | (internal_cat_id, date, hour) | One row per cat per day per hour.               |
+
+Example query — average activity by hour of day:
+```sql
+SELECT hour, ROUND(AVG(active_minutes), 1) FROM tractive_hourly_activity WHERE internal_cat_id=? GROUP BY hour ORDER BY hour;
+```
+
+---
+
+## 7. `tractive_sleep_phases`
+
+One row per sleep phase span; enables sleep pattern and fragmentation analysis.
+
+| Column Name     | Data Type | Constraints | Description                                                    |
+|-----------------|-----------|-------------|----------------------------------------------------------------|
+| id              | INTEGER   | PRIMARY KEY AUTOINCREMENT | Unique row ID.                                   |
+| internal_cat_id | INTEGER   | NOT NULL    | Foreign key to `cat_identities.internal_cat_id`.              |
+| date            | TEXT      | NOT NULL    | Local date in `YYYY-MM-DD` format.                             |
+| time_offset     | INTEGER   | NOT NULL    | Minutes from midnight when this phase started.                 |
+| time_span       | INTEGER   | NOT NULL    | Duration of this phase in minutes.                             |
+| type            | TEXT      | NOT NULL    | Phase type: `NIGHT`, `DAY`, or `OTHER`.                        |
+
+Example query — when does deep sleep (NIGHT) typically start?
+```sql
+SELECT ROUND(AVG(time_offset) / 60.0, 1) || 'h' FROM tractive_sleep_phases WHERE type='NIGHT' AND internal_cat_id=?;
+```
+
+---
+
+## 9. `surepet_events`
 
 Stores event data from the SurePet timeline.
 
@@ -86,7 +152,7 @@ Stores event data from the SurePet timeline.
 
 ---
 
-## 6. `devices`
+## 10. `devices`
 
 Stores the status of SurePet hardware (flap, hub, etc.).
 
@@ -100,7 +166,7 @@ Stores the status of SurePet hardware (flap, hub, etc.).
 
 ---
 
-## 7. `users`
+## 11. `surepet_users`
 
 Stores information about SurePet users.
 

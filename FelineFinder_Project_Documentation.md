@@ -20,7 +20,10 @@ The backend is responsible for all data collection, storage, and processing. It 
 - `db_setup.py`: A one-time setup script that creates the `cat_tracker.db` SQLite database file and all necessary tables. Should only be run once on a new setup.
 - `db_utils.py`: A shared utility library for all database access. Contains functions for querying and writing cat identities, tracker assignments, GPS positions, and flap events. Imported by other scripts; not run directly.
 - `tractive_initial_fetch.py` & `surepet_initial_fetch.py`: One-time scripts for performing a large historical data download from each service to populate the database. Resumable and retry-safe.
-- `tractive_backfill.py`: Backfills historical GPS data for a single tracker. Used by `api_server.py` when a tracker is assigned or reactivated via the Settings UI. Runs in a background daemon thread so the API response is immediate.
+- `tractive_backfill.py`: Backfills historical GPS data for a single tracker. Used by `api_server.py` when a tracker is assigned or reactivated via the Settings UI. Runs in a background daemon thread so the API response is immediate. Updated June 2026 to also write the extended GPS fields (speed, alt, pos_uncertainty, sensor_used, course).
+- `backfill_extended_fields.py`: One-off script that retroactively populates the five new GPS columns (speed, alt, pos_uncertainty, sensor_used, course) for existing rows by re-fetching from the Tractive API. Chunked in 14-day windows with exponential backoff; resumable. Only affects rows where `sensor_used IS NULL`.
+- `health_collector.py`: Daily collector (run by `health_collector.timer` at 06:00) that fetches yesterday's activity and sleep data for Arthur and King from `graph.tractive.com/4`. Writes to `tractive_health_daily`, `tractive_hourly_activity`, and `tractive_sleep_phases`.
+- `health_backfill.py`: One-off script that fetches full health/sleep history from 2024-03-01 to today for Arthur and King. Resumable, zero-tolerant, exponential backoff per date.
 - `tractive_collector.py` & `surepet_collector.py`: Long-running data collection services. Each runs in a continuous loop fetching new data from its respective API. `tractive_collector` re-reads active trackers from the database each cycle, so tracker changes take effect without a restart.
 - `api_server.py`: A Flask web server with two roles:
   - **API Provider**: Exposes JSON endpoints the frontend calls. Contains the Confidence Engine, zone detection, territory polygon calculation (DBSCAN + convex hull), and tracker management logic.
@@ -43,13 +46,14 @@ The backend is responsible for all data collection, storage, and processing. It 
 
 ### 2.3. System Health & Monitoring
 
-- Core components (`tractive_collector`, `surepet_collector`, `api_server`) are managed as systemd services.
+- Core components (`tractive_collector`, `surepet_collector`, `api_server`) are managed as systemd services. `health_collector` runs as a one-shot service triggered daily by `health_collector.timer`.
 
 **Checking Service Status**
 ```bash
 sudo systemctl status tractive_collector.service
 sudo systemctl status surepet_collector.service
 sudo systemctl status api_server.service
+sudo systemctl status health_collector.timer
 ```
 
 **Viewing Logs**
