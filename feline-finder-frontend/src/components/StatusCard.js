@@ -32,7 +32,7 @@ const StatusCard = ({cat, lastRefresh}) => {
                     <div className="min-w-0">
                         <p className="text-sm sm:text-xl font-semibold text-gray-700 leading-tight">{cat.status}</p>
                         {cat.location_detail && (
-                            <p className="text-xs sm:text-sm text-blue-600 font-medium truncate">{cat.location_detail}</p>
+                            <p className="text-xs sm:text-sm text-blue-600 font-medium leading-tight">{cat.location_detail}</p>
                         )}
                     </div>
                 </div>
