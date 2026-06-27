@@ -93,17 +93,17 @@ export default function App() {
                 </header>
 
                 <div className="mb-8 border-b border-gray-200">
-                    <nav className="flex -mb-px space-x-6">
+                    <nav className="flex -mb-px space-x-2 sm:space-x-6">
                         <button onClick={() => setActiveView('dashboard')}
-                                className={`whitespace-nowrap py-4 px-1 border-b-2 font-medium text-lg ${activeView === 'dashboard' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}`}>
+                                className={`whitespace-nowrap py-3 sm:py-4 px-1 border-b-2 font-medium text-sm sm:text-lg ${activeView === 'dashboard' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}`}>
                             Live Dashboard
                         </button>
                         <button onClick={() => setActiveView('history')}
-                                className={`whitespace-nowrap py-4 px-1 border-b-2 font-medium text-lg ${activeView === 'history' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}`}>
+                                className={`whitespace-nowrap py-3 sm:py-4 px-1 border-b-2 font-medium text-sm sm:text-lg ${activeView === 'history' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}`}>
                             Historical Analysis
                         </button>
                         <button onClick={() => setActiveView('settings')}
-                                className={`whitespace-nowrap py-4 px-1 border-b-2 font-medium text-lg ${activeView === 'settings' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}`}>
+                                className={`whitespace-nowrap py-3 sm:py-4 px-1 border-b-2 font-medium text-sm sm:text-lg ${activeView === 'settings' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}`}>
                             Settings
                         </button>
                     </nav>

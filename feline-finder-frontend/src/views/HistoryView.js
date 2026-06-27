@@ -70,55 +70,52 @@ const HistoryView = ({catNames, knownZones}) => {
 
     return (
         <div>
-            <div className="bg-white rounded-2xl shadow-lg p-6 mb-8">
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
+            <div className="bg-white rounded-2xl shadow-lg p-4 md:p-6 mb-4 md:mb-6">
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-3 md:gap-6 mb-4 md:mb-6">
                     <div>
-                        <label htmlFor="cat-select" className="block text-sm font-medium text-gray-700 mb-1">Select
-                            Cat</label>
+                        <label htmlFor="cat-select" className="block text-xs md:text-sm font-medium text-gray-700 mb-1">Cat</label>
                         <select id="cat-select" value={historyCat} onChange={(e) => setHistoryCat(e.target.value)}
-                                className="w-full p-2 border border-gray-300 rounded-lg shadow-sm">
+                                className="w-full p-2 text-sm border border-gray-300 rounded-lg shadow-sm">
                             {catNames.map(name => <option key={name} value={name}>{name}</option>)}
                         </select>
                     </div>
                     <div>
-                        <label htmlFor="window-select" className="block text-sm font-medium text-gray-700 mb-1">Window
-                            Size</label>
+                        <label htmlFor="window-select" className="block text-xs md:text-sm font-medium text-gray-700 mb-1">Window</label>
                         <select id="window-select" value={windowSizeDays}
                                 onChange={(e) => setWindowSizeDays(Number(e.target.value))}
-                                className="w-full p-2 border border-gray-300 rounded-lg shadow-sm">
+                                className="w-full p-2 text-sm border border-gray-300 rounded-lg shadow-sm">
                             <option value="7">7 Days</option>
                             <option value="14">14 Days</option>
                             <option value="30">30 Days</option>
                         </select>
                     </div>
-                    <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">Map View</label>
+                    <div className="col-span-2 md:col-span-1">
+                        <label className="block text-xs md:text-sm font-medium text-gray-700 mb-1">View</label>
                         <div className="flex items-center space-x-2 bg-gray-100 p-1 rounded-lg">
                             <button onClick={() => setMapViewType('points')}
-                                    className={`w-full py-1 text-sm rounded-md ${mapViewType === 'points' ? 'bg-white shadow' : 'text-gray-600'}`}>Points
+                                    className={`w-full py-1.5 text-sm rounded-md ${mapViewType === 'points' ? 'bg-white shadow font-medium' : 'text-gray-600'}`}>Points
                             </button>
                             <button onClick={() => setMapViewType('territory')}
-                                    className={`w-full py-1 text-sm rounded-md ${mapViewType === 'territory' ? 'bg-white shadow' : 'text-gray-600'}`}>Territory
+                                    className={`w-full py-1.5 text-sm rounded-md ${mapViewType === 'territory' ? 'bg-white shadow font-medium' : 'text-gray-600'}`}>Territory
                             </button>
                         </div>
                     </div>
                 </div>
                 <div>
-                    <label htmlFor="timeline-slider" className="block text-sm font-medium text-gray-700 mb-2">Timeline
-                        End Date</label>
+                    <label htmlFor="timeline-slider" className="block text-xs md:text-sm font-medium text-gray-700 mb-2">Timeline End Date</label>
                     <input type="range" id="timeline-slider" min={timelineStartDate.getTime()}
                            max={new Date().getTime()} value={historyEndDate.getTime()}
                            onChange={(e) => setHistoryEndDate(new Date(Number(e.target.value)))} step={86400000}
-                           className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"/>
+                           className="w-full h-3 md:h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"/>
                     <div className="flex justify-between text-xs text-gray-500 mt-2">
-                        <span>Window Start: {formatDate(historyStartDate)}</span>
-                        <span>Window End: {formatDate(historyEndDate)}</span>
+                        <span>{formatDate(historyStartDate)}</span>
+                        <span>{formatDate(historyEndDate)}</span>
                     </div>
                 </div>
             </div>
             {historyLoading ? <LoadingSpinner/> : historyError ? <ErrorDisplay message={historyError}/> : (
-                <div className="bg-white rounded-2xl shadow-lg p-6">
-                    <h3 className="text-xl font-bold text-gray-800 mb-4">Territory Map</h3>
+                <div className="bg-white rounded-2xl shadow-lg p-3 md:p-6">
+                    <h3 className="text-base md:text-xl font-bold text-gray-800 mb-3 md:mb-4">Territory Map</h3>
                     <TerritoryMap
                         gpsPoints={filteredGps}
                         zones={knownZones}

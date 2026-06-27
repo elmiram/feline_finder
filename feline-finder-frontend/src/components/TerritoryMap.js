@@ -1,102 +1,153 @@
-import React, {useRef, useEffect} from 'react';
+import React, { useMemo, useEffect, useState } from 'react';
+import { MapContainer, TileLayer, Polygon, CircleMarker, Tooltip, useMap } from 'react-leaflet';
+import 'leaflet/dist/leaflet.css';
+import '../map.css';
 
-const TerritoryMap = ({gpsPoints, zones, territory, viewType}) => {
-    const canvasRef = useRef(null);
+const ZONE_COLORS = [
+    { fill: '#6B8A7A', stroke: '#4a6b5a' },
+    { fill: '#8E7C68', stroke: '#6e5c48' },
+    { fill: '#CC9966', stroke: '#aa7744' },
+    { fill: '#996666', stroke: '#774444' },
+];
 
+const TILE_LAYERS = {
+    map: {
+        url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+        label: 'Map',
+    },
+    satellite: {
+        url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+        attribution: '&copy; <a href="https://www.esri.com/">Esri</a> World Imagery',
+        label: 'Satellite',
+    },
+    topo: {
+        url: 'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png',
+        attribution: '&copy; <a href="https://opentopomap.org">OpenTopoMap</a>',
+        label: 'Topo',
+    },
+};
+
+const DEFAULT_CENTER = [47.1666, 8.6280];
+const DEFAULT_ZOOM = 15;
+
+const downsample = (points, maxCount) => {
+    if (points.length <= maxCount) return points;
+    const step = Math.ceil(points.length / maxCount);
+    const result = [];
+    for (let i = 0; i < points.length; i += step) result.push(points[i]);
+    if (result[result.length - 1] !== points[points.length - 1]) result.push(points[points.length - 1]);
+    return result;
+};
+
+const FitBounds = ({ bounds }) => {
+    const map = useMap();
     useEffect(() => {
-        const canvas = canvasRef.current;
-        if (!canvas) return;
-        const ctx = canvas.getContext('2d');
-        const rect = canvas.parentElement.getBoundingClientRect();
-        canvas.width = rect.width;
-        canvas.height = rect.height;
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        if (bounds) map.fitBounds(bounds, { padding: [20, 20], maxZoom: 17 });
+    }, [map, bounds]);
+    return null;
+};
 
-        const allZonePoints = Object.values(zones).flat();
-        const allPoints = [...gpsPoints.map(p => ({lat: p.lat, lon: p.lon})), ...allZonePoints.map(p => ({
-            lat: p[0],
-            lon: p[1]
-        }))];
+const TerritoryMap = ({ gpsPoints, zones, territory, viewType }) => {
+    const [tileStyle, setTileStyle] = useState('map');
 
-        if (allPoints.length === 0) {
-            ctx.fillStyle = '#6B7280';
-            ctx.textAlign = 'center';
-            ctx.font = '16px sans-serif';
-            ctx.fillText('No GPS data available for this window.', canvas.width / 2, canvas.height / 2);
-            return;
-        }
+    const bounds = useMemo(() => {
+        const coords = [
+            ...gpsPoints.map(p => [p.lat, p.lon]),
+            ...Object.values(zones).flat().map(p => [p[0], p[1]]),
+            ...territory.map(p => [p[0], p[1]]),
+        ];
+        if (coords.length === 0) return null;
+        const lats = coords.map(p => p[0]);
+        const lons = coords.map(p => p[1]);
+        return [[Math.min(...lats), Math.min(...lons)], [Math.max(...lats), Math.max(...lons)]];
+    }, [gpsPoints, zones, territory]);
 
-        // Hardcoded map boundaries for consistency, can be dynamic if needed
-        const minLat = 47.162404, maxLat = 47.170737;
-        const minLon = 8.618863, maxLon = 8.637247;
-        const latRange = maxLat - minLat || 0.001, lonRange = maxLon - minLon || 0.001;
-        const padding = 20;
-
-        const toCanvasCoords = (lat, lon) => {
-            const x = padding + ((lon - minLon) / lonRange) * (canvas.width - 2 * padding);
-            const y = padding + ((maxLat - lat) / latRange) * (canvas.height - 2 * padding);
-            return {x, y};
-        };
-
-        // Draw Zones
-        const zoneColors = ['rgba(107, 138, 122, 0.2)', 'rgba(142, 124, 104, 0.2)', 'rgba(204, 153, 102, 0.2)', 'rgba(153, 102, 102, 0.2)'];
-        let colorIndex = 0;
-        for (const zoneName in zones) {
-            const polygon = zones[zoneName];
-            ctx.beginPath();
-            const startPoint = toCanvasCoords(polygon[0][0], polygon[0][1]);
-            ctx.moveTo(startPoint.x, startPoint.y);
-            for (let i = 1; i < polygon.length; i++) {
-                const point = toCanvasCoords(polygon[i][0], polygon[i][1]);
-                ctx.lineTo(point.x, point.y);
-            }
-            ctx.closePath();
-            ctx.fillStyle = zoneColors[colorIndex % zoneColors.length];
-            ctx.fill();
-            ctx.strokeStyle = zoneColors[colorIndex % zoneColors.length].replace('0.2', '0.5');
-            ctx.stroke();
-
-            const center = polygon.reduce((acc, p) => ({lat: acc.lat + p[0], lon: acc.lon + p[1]}), {lat: 0, lon: 0});
-            center.lat /= polygon.length;
-            center.lon /= polygon.length;
-            const labelPos = toCanvasCoords(center.lat, center.lon);
-            ctx.fillStyle = '#374151';
-            ctx.textAlign = 'center';
-            ctx.font = 'bold 10px sans-serif';
-            ctx.fillText(zoneName, labelPos.x, labelPos.y);
-
-            colorIndex++;
-        }
-
-        // Draw GPS points or Territory
-        if (viewType === 'points' && gpsPoints.length > 0) {
-            gpsPoints.forEach((p, i) => {
-                const {x, y} = toCanvasCoords(p.lat, p.lon);
-                ctx.beginPath();
-                ctx.arc(x, y, 2.5, 0, 2 * Math.PI);
-                ctx.fillStyle = `rgba(59, 130, 246, ${0.3 + (i / gpsPoints.length) * 0.7})`;
-                ctx.fill();
-            });
-        } else if (viewType === 'territory' && territory.length > 0) {
-            ctx.beginPath();
-            const startPoint = toCanvasCoords(territory[0][0], territory[0][1]);
-            ctx.moveTo(startPoint.x, startPoint.y);
-            for (let i = 1; i < territory.length; i++) {
-                const point = toCanvasCoords(territory[i][0], territory[i][1]);
-                ctx.lineTo(point.x, point.y);
-            }
-            ctx.closePath();
-            ctx.fillStyle = 'rgba(59, 130, 246, 0.2)';
-            ctx.fill();
-            ctx.strokeStyle = 'rgba(59, 130, 246, 0.8)';
-            ctx.lineWidth = 2;
-            ctx.stroke();
-        }
-    }, [gpsPoints, zones, territory, viewType]);
+    const sampledPoints = useMemo(() => downsample(gpsPoints, 600), [gpsPoints]);
+    const zoneEntries = Object.entries(zones);
+    const hasData = gpsPoints.length > 0 || zoneEntries.length > 0 || territory.length > 0;
+    const isSatellite = tileStyle === 'satellite';
+    const tile = TILE_LAYERS[tileStyle];
 
     return (
-        <div className="w-full h-[500px] rounded-lg overflow-hidden border">
-            <canvas ref={canvasRef} className="bg-gray-50 w-full h-full"></canvas>
+        <div className="w-full rounded-lg overflow-hidden border relative" style={{ height: 'clamp(280px, 45vh, 500px)' }}>
+            <MapContainer
+                center={DEFAULT_CENTER}
+                zoom={DEFAULT_ZOOM}
+                style={{ height: '100%', width: '100%' }}
+                zoomControl={true}
+            >
+                <TileLayer key={tileStyle} url={tile.url} attribution={tile.attribution} />
+
+                {bounds && <FitBounds bounds={bounds} />}
+
+                {zoneEntries.map(([name, polygon], i) => {
+                    const color = ZONE_COLORS[i % ZONE_COLORS.length];
+                    return (
+                        <Polygon
+                            key={name}
+                            positions={polygon.map(p => [p[0], p[1]])}
+                            pathOptions={{
+                                fillColor: color.fill,
+                                fillOpacity: isSatellite ? 0.1 : 0.2,
+                                color: isSatellite ? '#ffffff' : color.stroke,
+                                weight: isSatellite ? 2.5 : 2,
+                            }}
+                        >
+                            <Tooltip direction="center" className="zone-label" sticky>{name}</Tooltip>
+                        </Polygon>
+                    );
+                })}
+
+                {viewType === 'points' && sampledPoints.map((p, i) => (
+                    <CircleMarker
+                        key={i}
+                        center={[p.lat, p.lon]}
+                        radius={3}
+                        pathOptions={{
+                            fillColor: '#3B82F6',
+                            fillOpacity: 0.3 + (i / sampledPoints.length) * 0.7,
+                            color: 'transparent',
+                            weight: 0,
+                        }}
+                    />
+                ))}
+
+                {viewType === 'territory' && territory.length > 0 && (
+                    <Polygon
+                        positions={territory.map(p => [p[0], p[1]])}
+                        pathOptions={{
+                            fillColor: '#3B82F6',
+                            fillOpacity: 0.2,
+                            color: isSatellite ? '#60a5fa' : '#3B82F6',
+                            weight: 2,
+                        }}
+                    />
+                )}
+            </MapContainer>
+
+            {/* Tile layer toggle — top-right corner, above Leaflet controls */}
+            <div className="absolute top-2 right-2 flex rounded-lg overflow-hidden shadow border border-gray-300" style={{ zIndex: 1001 }}>
+                {Object.entries(TILE_LAYERS).map(([key, layer]) => (
+                    <button
+                        key={key}
+                        onClick={() => setTileStyle(key)}
+                        className={`px-2.5 py-1 text-xs font-medium transition-colors ${
+                            tileStyle === key
+                                ? 'bg-blue-600 text-white'
+                                : 'bg-white text-gray-600 hover:bg-gray-50'
+                        }`}
+                    >
+                        {layer.label}
+                    </button>
+                ))}
+            </div>
+
+            {!hasData && (
+                <div className="absolute inset-0 flex items-center justify-center bg-gray-50 text-gray-500 text-sm">
+                    No GPS data available for this window.
+                </div>
+            )}
         </div>
     );
 };
