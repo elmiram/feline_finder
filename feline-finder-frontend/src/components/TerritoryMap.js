@@ -2,6 +2,7 @@ import React, { useMemo, useEffect, useState } from 'react';
 import { MapContainer, TileLayer, Polygon, CircleMarker, Tooltip, useMap } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import '../map.css';
+import { API_BASE_URL } from '../constants';
 
 const ZONE_COLORS = [
     { fill: '#6B8A7A', stroke: '#4a6b5a' },
@@ -48,26 +49,107 @@ const FitBounds = ({ bounds }) => {
     return null;
 };
 
-const TerritoryMap = ({ gpsPoints, zones, territory, viewType }) => {
+// Find the best-matching weekly territory entry for the selected date
+const findTerritoryForDate = (territories, selectedDate) => {
+    if (!territories || territories.length === 0) return null;
+    const selected = selectedDate instanceof Date ? selectedDate : new Date(selectedDate);
+    const selectedTs = selected.getTime();
+
+    // Find exact match: period_start <= selectedDate <= period_end
+    const exact = territories.find(t => {
+        const start = new Date(t.period_start).getTime();
+        const end = new Date(t.period_end).getTime();
+        return start <= selectedTs && selectedTs <= end;
+    });
+    if (exact) return exact;
+
+    // Fallback: closest by period_start
+    let closest = null;
+    let minDiff = Infinity;
+    for (const t of territories) {
+        const diff = Math.abs(new Date(t.period_start).getTime() - selectedTs);
+        if (diff < minDiff) {
+            minDiff = diff;
+            closest = t;
+        }
+    }
+    return closest;
+};
+
+// Convert [lon, lat] stored coords to Leaflet [lat, lon]
+const swapCoords = (ring) => ring.map(([lon, lat]) => [lat, lon]);
+
+const TerritoryMap = ({ gpsPoints, zones, territory, viewType, catName, historyEndDate }) => {
     const [tileStyle, setTileStyle] = useState('map');
+
+    // Alpha shape territory from DB
+    const [weeklyTerritories, setWeeklyTerritories] = useState([]);
+    const [territoryLoading, setTerritoryLoading] = useState(false);
+    const [territoryFetched, setTerritoryFetched] = useState(null); // track which cat was fetched
+
+    useEffect(() => {
+        if (viewType !== 'territory' || !catName) return;
+        if (territoryFetched === catName) return; // already fetched for this cat
+
+        setTerritoryLoading(true);
+        fetch(`${API_BASE_URL}/api/territory/weekly?cat_name=${encodeURIComponent(catName)}&limit=52`)
+            .then(r => r.json())
+            .then(data => {
+                setWeeklyTerritories(data.territories || []);
+                setTerritoryFetched(catName);
+            })
+            .catch(err => {
+                console.error('Failed to fetch weekly territories:', err);
+                setWeeklyTerritories([]);
+                setTerritoryFetched(catName);
+            })
+            .finally(() => setTerritoryLoading(false));
+    }, [viewType, catName, territoryFetched]);
+
+    // Re-fetch when cat changes
+    useEffect(() => {
+        setTerritoryFetched(null);
+        setWeeklyTerritories([]);
+    }, [catName]);
+
+    const alphaShapeEntry = useMemo(() => {
+        if (viewType !== 'territory') return null;
+        return findTerritoryForDate(weeklyTerritories, historyEndDate || new Date());
+    }, [weeklyTerritories, historyEndDate, viewType]);
+
+    const alphaPositions = useMemo(() => {
+        if (!alphaShapeEntry) return null;
+        try {
+            const outerRing = swapCoords(JSON.parse(alphaShapeEntry.polygon_json));
+            const holesRaw = alphaShapeEntry.holes_json ? JSON.parse(alphaShapeEntry.holes_json) : null;
+            const holes = holesRaw ? holesRaw.map(swapCoords) : [];
+            return [outerRing, ...holes];
+        } catch (e) {
+            console.error('Failed to parse territory polygon:', e);
+            return null;
+        }
+    }, [alphaShapeEntry]);
 
     const bounds = useMemo(() => {
         const coords = [
             ...gpsPoints.map(p => [p.lat, p.lon]),
             ...Object.values(zones).flat().map(p => [p[0], p[1]]),
-            ...territory.map(p => [p[0], p[1]]),
+            ...(viewType === 'territory' && alphaPositions ? alphaPositions.flat() : territory.map(p => [p[0], p[1]])),
         ];
         if (coords.length === 0) return null;
         const lats = coords.map(p => p[0]);
         const lons = coords.map(p => p[1]);
         return [[Math.min(...lats), Math.min(...lons)], [Math.max(...lats), Math.max(...lons)]];
-    }, [gpsPoints, zones, territory]);
+    }, [gpsPoints, zones, territory, alphaPositions, viewType]);
 
     const sampledPoints = useMemo(() => downsample(gpsPoints, 600), [gpsPoints]);
     const zoneEntries = Object.entries(zones);
-    const hasData = gpsPoints.length > 0 || zoneEntries.length > 0 || territory.length > 0;
+    const hasData = gpsPoints.length > 0 || zoneEntries.length > 0 || territory.length > 0 || alphaPositions !== null;
     const isSatellite = tileStyle === 'satellite';
     const tile = TILE_LAYERS[tileStyle];
+
+    const noTerritoryForPeriod = viewType === 'territory' && !territoryLoading && weeklyTerritories.length > 0 && !alphaShapeEntry;
+    const noTerritoryAtAll = viewType === 'territory' && !territoryLoading && weeklyTerritories.length === 0 && territoryFetched === catName;
 
     return (
         <div className="w-full rounded-lg overflow-hidden border relative" style={{ height: 'clamp(280px, 45vh, 500px)' }}>
@@ -113,9 +195,9 @@ const TerritoryMap = ({ gpsPoints, zones, territory, viewType }) => {
                     />
                 ))}
 
-                {viewType === 'territory' && territory.length > 0 && (
+                {viewType === 'territory' && alphaPositions && (
                     <Polygon
-                        positions={territory.map(p => [p[0], p[1]])}
+                        positions={alphaPositions}
                         pathOptions={{
                             fillColor: '#3B82F6',
                             fillOpacity: 0.2,
@@ -143,7 +225,19 @@ const TerritoryMap = ({ gpsPoints, zones, territory, viewType }) => {
                 ))}
             </div>
 
-            {!hasData && (
+            {territoryLoading && (
+                <div className="absolute inset-0 flex items-center justify-center bg-white bg-opacity-70 text-gray-500 text-sm" style={{ zIndex: 1002 }}>
+                    Loading territory data...
+                </div>
+            )}
+
+            {(noTerritoryForPeriod || noTerritoryAtAll) && (
+                <div className="absolute inset-0 flex items-center justify-center bg-gray-50 bg-opacity-80 text-gray-500 text-sm" style={{ zIndex: 1002 }}>
+                    No territory data for this period
+                </div>
+            )}
+
+            {!hasData && !territoryLoading && viewType !== 'territory' && (
                 <div className="absolute inset-0 flex items-center justify-center bg-gray-50 text-gray-500 text-sm">
                     No GPS data available for this window.
                 </div>
