@@ -92,10 +92,36 @@ const findTerritoryForDate = (territories, selectedDate) => {
 // Convert [lon, lat] stored coords to Leaflet [lat, lon]
 const swapCoords = (ring) => ring.map(([lon, lat]) => [lat, lon]);
 
-const TerritoryMap = ({ gpsPoints, zones, territory, viewType, catName, historyEndDate, historyStartDate }) => {
+// Parse a territory DB entry into Leaflet positions array (outer ring + holes), or null
+const parsePositions = (entry) => {
+    if (!entry) return null;
+    try {
+        const outerRing = swapCoords(JSON.parse(entry.polygon_json));
+        const holesRaw = entry.holes_json ? JSON.parse(entry.holes_json) : null;
+        const holes = holesRaw ? holesRaw.map(swapCoords) : [];
+        return [outerRing, ...holes];
+    } catch (e) {
+        console.error('Failed to parse territory polygon:', e);
+        return null;
+    }
+};
+
+const TerritoryMap = ({
+    gpsPoints,
+    zones,
+    territory,
+    viewType,
+    catName,
+    historyEndDate,
+    historyStartDate,
+    // All-cats mode props (optional)
+    allCatsTerritories,
+    allCatsLoading,
+    catColors,
+}) => {
     const [tileStyle, setTileStyle] = useState('map');
 
-    // Alpha shape territory from DB
+    // Single-cat alpha shape territory from DB
     const [weeklyTerritories, setWeeklyTerritories] = useState([]);
     const [territoryLoading, setTerritoryLoading] = useState(false);
     const [territoryFetched, setTerritoryFetched] = useState(null); // track which cat was fetched
@@ -105,7 +131,10 @@ const TerritoryMap = ({ gpsPoints, zones, territory, viewType, catName, historyE
     const [heatmapMaxCount, setHeatmapMaxCount] = useState(1);
     const [heatmapLoading, setHeatmapLoading] = useState(false);
 
+    const isAllCatsMode = !!allCatsTerritories;
+
     useEffect(() => {
+        if (isAllCatsMode) return; // all-cats mode: HistoryView manages fetching
         if (viewType !== 'territory' || !catName) return;
         if (territoryFetched === catName) return; // already fetched for this cat
 
@@ -122,7 +151,7 @@ const TerritoryMap = ({ gpsPoints, zones, territory, viewType, catName, historyE
                 setTerritoryFetched(catName);
             })
             .finally(() => setTerritoryLoading(false));
-    }, [viewType, catName, territoryFetched]);
+    }, [viewType, catName, territoryFetched, isAllCatsMode]);
 
     // Re-fetch when cat changes
     useEffect(() => {
@@ -154,23 +183,25 @@ const TerritoryMap = ({ gpsPoints, zones, territory, viewType, catName, historyE
             .finally(() => setHeatmapLoading(false));
     }, [viewType, catName, historyEndDate, historyStartDate]);
 
+    // Single-cat territory positions
     const alphaShapeEntry = useMemo(() => {
-        if (viewType !== 'territory') return null;
+        if (isAllCatsMode || viewType !== 'territory') return null;
         return findTerritoryForDate(weeklyTerritories, historyEndDate || new Date());
-    }, [weeklyTerritories, historyEndDate, viewType]);
+    }, [weeklyTerritories, historyEndDate, viewType, isAllCatsMode]);
 
-    const alphaPositions = useMemo(() => {
-        if (!alphaShapeEntry) return null;
-        try {
-            const outerRing = swapCoords(JSON.parse(alphaShapeEntry.polygon_json));
-            const holesRaw = alphaShapeEntry.holes_json ? JSON.parse(alphaShapeEntry.holes_json) : null;
-            const holes = holesRaw ? holesRaw.map(swapCoords) : [];
-            return [outerRing, ...holes];
-        } catch (e) {
-            console.error('Failed to parse territory polygon:', e);
-            return null;
-        }
-    }, [alphaShapeEntry]);
+    const alphaPositions = useMemo(() => parsePositions(alphaShapeEntry), [alphaShapeEntry]);
+
+    // All-cats territory positions: array of { catName, color, positions }
+    const allCatsPolygons = useMemo(() => {
+        if (!isAllCatsMode || !allCatsTerritories) return [];
+        const selectedDate = historyEndDate || new Date();
+        return Object.entries(allCatsTerritories).flatMap(([name, territories]) => {
+            const entry = findTerritoryForDate(territories, selectedDate);
+            const positions = parsePositions(entry);
+            if (!positions) return [];
+            return [{ catName: name, color: (catColors && catColors[name]) || '#999999', positions }];
+        });
+    }, [isAllCatsMode, allCatsTerritories, historyEndDate, catColors]);
 
     const heatPoints = useMemo(() => {
         if (viewType !== 'heatmap') return [];
@@ -178,25 +209,38 @@ const TerritoryMap = ({ gpsPoints, zones, territory, viewType, catName, historyE
     }, [heatmapCells, heatmapMaxCount, viewType]);
 
     const bounds = useMemo(() => {
-        const coords = [
+        let coords = [
             ...gpsPoints.map(p => [p.lat, p.lon]),
             ...Object.values(zones).flat().map(p => [p[0], p[1]]),
-            ...(viewType === 'territory' && alphaPositions ? alphaPositions.flat() : territory.map(p => [p[0], p[1]])),
         ];
+
+        if (isAllCatsMode) {
+            allCatsPolygons.forEach(({ positions }) => {
+                coords = [...coords, ...positions.flat()];
+            });
+        } else if (viewType === 'territory' && alphaPositions) {
+            coords = [...coords, ...alphaPositions.flat()];
+        } else {
+            coords = [...coords, ...territory.map(p => [p[0], p[1]])];
+        }
+
         if (coords.length === 0) return null;
         const lats = coords.map(p => p[0]);
         const lons = coords.map(p => p[1]);
         return [[Math.min(...lats), Math.min(...lons)], [Math.max(...lats), Math.max(...lons)]];
-    }, [gpsPoints, zones, territory, alphaPositions, viewType]);
+    }, [gpsPoints, zones, territory, alphaPositions, viewType, isAllCatsMode, allCatsPolygons]);
 
     const sampledPoints = useMemo(() => downsample(gpsPoints, 600), [gpsPoints]);
     const zoneEntries = Object.entries(zones);
-    const hasData = gpsPoints.length > 0 || zoneEntries.length > 0 || territory.length > 0 || alphaPositions !== null || heatmapCells.length > 0;
+    const hasData = gpsPoints.length > 0 || zoneEntries.length > 0 || territory.length > 0
+        || alphaPositions !== null || heatmapCells.length > 0 || allCatsPolygons.length > 0;
     const isSatellite = tileStyle === 'satellite';
     const tile = TILE_LAYERS[tileStyle];
 
-    const noTerritoryForPeriod = viewType === 'territory' && !territoryLoading && weeklyTerritories.length > 0 && !alphaShapeEntry;
-    const noTerritoryAtAll = viewType === 'territory' && !territoryLoading && weeklyTerritories.length === 0 && territoryFetched === catName;
+    const noTerritoryForPeriod = !isAllCatsMode && viewType === 'territory' && !territoryLoading && weeklyTerritories.length > 0 && !alphaShapeEntry;
+    const noTerritoryAtAll = !isAllCatsMode && viewType === 'territory' && !territoryLoading && weeklyTerritories.length === 0 && territoryFetched === catName;
+
+    const isLoading = territoryLoading || heatmapLoading || (isAllCatsMode && allCatsLoading);
 
     return (
         <div className="w-full rounded-lg overflow-hidden border relative" style={{ height: 'clamp(280px, 45vh, 500px)' }}>
@@ -242,7 +286,8 @@ const TerritoryMap = ({ gpsPoints, zones, territory, viewType, catName, historyE
                     />
                 ))}
 
-                {viewType === 'territory' && alphaPositions && (
+                {/* Single-cat territory polygon */}
+                {!isAllCatsMode && viewType === 'territory' && alphaPositions && (
                     <Polygon
                         positions={alphaPositions}
                         pathOptions={{
@@ -253,6 +298,20 @@ const TerritoryMap = ({ gpsPoints, zones, territory, viewType, catName, historyE
                         }}
                     />
                 )}
+
+                {/* All-cats territory polygons */}
+                {isAllCatsMode && allCatsPolygons.map(({ catName: name, color, positions }) => (
+                    <Polygon
+                        key={name}
+                        positions={positions}
+                        pathOptions={{
+                            fillColor: color,
+                            fillOpacity: 0.2,
+                            color: color,
+                            weight: 2,
+                        }}
+                    />
+                ))}
 
                 {viewType === 'heatmap' && heatPoints.length > 0 && (
                     <HeatmapLayer points={heatPoints} />
@@ -276,15 +335,9 @@ const TerritoryMap = ({ gpsPoints, zones, territory, viewType, catName, historyE
                 ))}
             </div>
 
-            {territoryLoading && (
+            {isLoading && (
                 <div className="absolute inset-0 flex items-center justify-center bg-white bg-opacity-70 text-gray-500 text-sm" style={{ zIndex: 1002 }}>
                     Loading territory data...
-                </div>
-            )}
-
-            {heatmapLoading && (
-                <div className="absolute inset-0 flex items-center justify-center bg-white bg-opacity-70 text-gray-500 text-sm" style={{ zIndex: 1002 }}>
-                    Loading heatmap data...
                 </div>
             )}
 
@@ -294,7 +347,7 @@ const TerritoryMap = ({ gpsPoints, zones, territory, viewType, catName, historyE
                 </div>
             )}
 
-            {!hasData && !territoryLoading && !heatmapLoading && viewType !== 'territory' && viewType !== 'heatmap' && (
+            {!hasData && !isLoading && viewType !== 'territory' && viewType !== 'heatmap' && (
                 <div className="absolute inset-0 flex items-center justify-center bg-gray-50 text-gray-500 text-sm">
                     No GPS data available for this window.
                 </div>

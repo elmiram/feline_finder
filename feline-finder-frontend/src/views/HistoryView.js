@@ -19,6 +19,15 @@ import { ChevronDown } from 'lucide-react';
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend);
 
+// Colours shared between the trend chart and the all-cats territory legend
+const CAT_COLORS = {
+    Arthur: '#F59E0B',
+    King: '#8B5CF6',
+    Trixie: '#2DD4BF',
+};
+
+const ALL_CATS_SENTINEL = '__all__';
+
 const HistoryView = ({ catNames, knownZones }) => {
     const [historyCat, setHistoryCat] = useState(catNames[0] || '');
     const [windowSizeDays, setWindowSizeDays] = useState(7);
@@ -28,7 +37,7 @@ const HistoryView = ({ catNames, knownZones }) => {
     const [historyEndDate, setHistoryEndDate] = useState(new Date());
     const debounceTimerRef = useRef(null);
 
-    const [mapViewType, setMapViewType] = useState('points');
+    const [mapViewType, setMapViewType] = useState('territory');
 
     const [filteredGps, setFilteredGps] = useState([]);
     const [territoryPolygon, setTerritoryPolygon] = useState([]);
@@ -51,12 +60,27 @@ const HistoryView = ({ catNames, knownZones }) => {
     const [overlapLoading, setOverlapLoading] = useState(true);
     const [overlapData, setOverlapData] = useState(null);
 
+    // --- All-cats territory state ---
+    // { Arthur: [...territories], King: [...], Trixie: [...] }
+    const [allCatsTerritories, setAllCatsTerritories] = useState({});
+    const [allCatsLoading, setAllCatsLoading] = useState(false);
+
+    const isAllCatsMode = historyCat === ALL_CATS_SENTINEL;
+
+    // If user switches away from territory view while in All Cats mode, revert to single cat
+    useEffect(() => {
+        if (isAllCatsMode && mapViewType !== 'territory') {
+            setHistoryCat(catNames[0] || '');
+        }
+    }, [mapViewType, isAllCatsMode, catNames]);
+
     useEffect(() => {
         isInitialCatLoad.current = true;
     }, [historyCat]);
 
+    // Fetch single-cat GPS history (skip when in All Cats mode)
     useEffect(() => {
-        if (!historyCat) return;
+        if (!historyCat || isAllCatsMode) return;
 
         const fetchHistoryForWindow = async () => {
             if (isInitialCatLoad.current) {
@@ -89,7 +113,31 @@ const HistoryView = ({ catNames, knownZones }) => {
         };
 
         fetchHistoryForWindow();
-    }, [historyCat, windowSizeDays, historyEndDate]);
+    }, [historyCat, windowSizeDays, historyEndDate, isAllCatsMode]);
+
+    // Fetch all-cats weekly territories when entering All Cats mode
+    useEffect(() => {
+        if (!isAllCatsMode) return;
+        // Only fetch cats we don't already have
+        const missing = catNames.filter(name => !allCatsTerritories[name]);
+        if (missing.length === 0) return;
+
+        setAllCatsLoading(true);
+        Promise.all(
+            missing.map(name =>
+                fetch(`${API_BASE_URL}/api/territory/weekly?cat_name=${encodeURIComponent(name)}&limit=52`)
+                    .then(r => r.ok ? r.json() : { territories: [] })
+                    .then(data => ({ name, territories: data.territories || [] }))
+                    .catch(() => ({ name, territories: [] }))
+            )
+        ).then(results => {
+            setAllCatsTerritories(prev => {
+                const next = { ...prev };
+                results.forEach(({ name, territories }) => { next[name] = territories; });
+                return next;
+            });
+        }).finally(() => setAllCatsLoading(false));
+    }, [isAllCatsMode, catNames, allCatsTerritories]);
 
     // Fetch territory trend data once on mount
     useEffect(() => {
@@ -185,7 +233,7 @@ const HistoryView = ({ catNames, knownZones }) => {
                     const entry = arthurTrend.find(t => t.period_start.slice(0, 7) === label);
                     return entry ? entry.area_m2 / 1_000_000 : null;
                 }),
-                borderColor: '#F59E0B',
+                borderColor: CAT_COLORS.Arthur,
                 backgroundColor: 'rgba(245,158,11,0.1)',
                 tension: 0.3,
                 spanGaps: true,
@@ -196,7 +244,7 @@ const HistoryView = ({ catNames, knownZones }) => {
                     const entry = kingTrend.find(t => t.period_start.slice(0, 7) === label);
                     return entry ? entry.area_m2 / 1_000_000 : null;
                 }),
-                borderColor: '#8B5CF6',
+                borderColor: CAT_COLORS.King,
                 backgroundColor: 'rgba(139,92,246,0.1)',
                 tension: 0.3,
                 spanGaps: true,
@@ -264,10 +312,20 @@ const HistoryView = ({ catNames, knownZones }) => {
                     <div className="grid grid-cols-2 md:grid-cols-3 gap-3 md:gap-6 mb-4 md:mb-6">
                         <div>
                             <label htmlFor="cat-select" className="block text-xs md:text-sm font-medium text-gray-700 mb-1">Cat</label>
-                            <select id="cat-select" value={historyCat} onChange={(e) => setHistoryCat(e.target.value)}
-                                className="w-full p-2 text-sm border border-gray-300 rounded-lg shadow-sm">
+                            <select
+                                id="cat-select"
+                                value={historyCat}
+                                onChange={(e) => setHistoryCat(e.target.value)}
+                                className="w-full p-2 text-sm border border-gray-300 rounded-lg shadow-sm"
+                            >
                                 {catNames.map(name => <option key={name} value={name}>{name}</option>)}
+                                <option value={ALL_CATS_SENTINEL}>
+                                    {mapViewType === 'territory' ? 'All Cats' : 'All Cats (Territory only)'}
+                                </option>
                             </select>
+                            {isAllCatsMode && mapViewType !== 'territory' && (
+                                <p className="text-xs text-amber-600 mt-1">All Cats is only available in Territory view</p>
+                            )}
                         </div>
                         <div>
                             <label htmlFor="window-select" className="block text-xs md:text-sm font-medium text-gray-700 mb-1">Window</label>
@@ -314,19 +372,49 @@ const HistoryView = ({ catNames, knownZones }) => {
                 </div>
             </div>
 
-            {historyLoading ? <LoadingSpinner /> : historyError ? <ErrorDisplay message={historyError} /> : (
+            {isAllCatsMode ? (
                 <div className="bg-white rounded-2xl shadow-lg p-3 md:p-6">
                     <h3 className="text-base md:text-xl font-bold text-gray-800 mb-3 md:mb-4">Territory Map</h3>
                     <TerritoryMap
-                        gpsPoints={filteredGps}
+                        gpsPoints={[]}
                         zones={knownZones}
-                        territory={territoryPolygon}
-                        viewType={mapViewType}
-                        catName={historyCat}
+                        territory={[]}
+                        viewType="territory"
+                        catName={null}
                         historyEndDate={historyEndDate}
                         historyStartDate={new Date(historyEndDate.getTime() - windowSizeDays * 24 * 60 * 60 * 1000)}
+                        allCatsTerritories={allCatsTerritories}
+                        allCatsLoading={allCatsLoading}
+                        catColors={CAT_COLORS}
                     />
+                    {/* All-cats legend */}
+                    <div className="flex flex-wrap gap-4 mt-3 justify-center">
+                        {catNames.map(name => (
+                            <div key={name} className="flex items-center gap-1.5 text-sm text-gray-700">
+                                <span
+                                    className="inline-block w-4 h-4 rounded-sm"
+                                    style={{ backgroundColor: CAT_COLORS[name] || '#999', opacity: 0.7 }}
+                                />
+                                {name}
+                            </div>
+                        ))}
+                    </div>
                 </div>
+            ) : (
+                historyLoading ? <LoadingSpinner /> : historyError ? <ErrorDisplay message={historyError} /> : (
+                    <div className="bg-white rounded-2xl shadow-lg p-3 md:p-6">
+                        <h3 className="text-base md:text-xl font-bold text-gray-800 mb-3 md:mb-4">Territory Map</h3>
+                        <TerritoryMap
+                            gpsPoints={filteredGps}
+                            zones={knownZones}
+                            territory={territoryPolygon}
+                            viewType={mapViewType}
+                            catName={historyCat}
+                            historyEndDate={historyEndDate}
+                            historyStartDate={new Date(historyEndDate.getTime() - windowSizeDays * 24 * 60 * 60 * 1000)}
+                        />
+                    </div>
+                )
             )}
 
             {/* Territory Area Trend */}
