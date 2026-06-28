@@ -269,6 +269,9 @@ const HistoryView = ({ catNames, knownZones }) => {
                                 <button onClick={() => setMapViewType('territory')}
                                     className={`w-full py-1.5 text-sm rounded-md ${mapViewType === 'territory' ? 'bg-white shadow font-medium' : 'text-gray-600'}`}>Territory
                                 </button>
+                                <button onClick={() => setMapViewType('heatmap')}
+                                    className={`w-full py-1.5 text-sm rounded-md ${mapViewType === 'heatmap' ? 'bg-white shadow font-medium' : 'text-gray-600'}`}>Heatmap
+                                </button>
                             </div>
                         </div>
                     </div>
@@ -302,6 +305,7 @@ const HistoryView = ({ catNames, knownZones }) => {
                         viewType={mapViewType}
                         catName={historyCat}
                         historyEndDate={historyEndDate}
+                        historyStartDate={new Date(historyEndDate.getTime() - windowSizeDays * 24 * 60 * 60 * 1000)}
                     />
                 </div>
             )}

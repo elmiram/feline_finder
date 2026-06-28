@@ -560,6 +560,72 @@ def get_territory_overlap():
     return jsonify(response)
 
 
+@app.route('/api/history/heatmap')
+def get_gps_heatmap():
+    cat_name = request.args.get('cat_name')
+    start_date_str = request.args.get('start_date')
+    end_date_str = request.args.get('end_date')
+    try:
+        grid_size = int(request.args.get('grid_size', 20))
+    except ValueError:
+        grid_size = 20
+
+    # Default to 90-day window if not provided
+    now = datetime.datetime.now(datetime.timezone.utc)
+    if not end_date_str:
+        end_date_str = now.isoformat()
+    if not start_date_str:
+        start_date_str = (now - datetime.timedelta(days=90)).isoformat()
+
+    conn = create_connection()
+    if not conn:
+        return jsonify({"error": "Database connection failed"}), 500
+
+    cursor = conn.cursor()
+    cursor.execute("SELECT internal_cat_id FROM cat_identities WHERE cat_name = ?", (cat_name,))
+    cat_row = cursor.fetchone()
+    if not cat_row:
+        conn.close()
+        return jsonify({"error": "Cat not found"}), 404
+    internal_cat_id = cat_row['internal_cat_id']
+
+    cursor.execute("""
+        SELECT latitude, longitude FROM tractive_gps_positions
+        WHERE internal_cat_id = ?
+          AND timestamp >= ? AND timestamp <= ?
+          AND (sensor_used IS NULL OR sensor_used = 'GPS')
+    """, (internal_cat_id, start_date_str, end_date_str))
+    rows = cursor.fetchall()
+    conn.close()
+
+    if not rows:
+        return jsonify({"cells": [], "max_count": 0})
+
+    lats = [r['latitude'] for r in rows]
+    lons = [r['longitude'] for r in rows]
+
+    min_lat, max_lat = min(lats), max(lats)
+    min_lon, max_lon = min(lons), max(lons)
+
+    lat_range = max_lat - min_lat or 1e-6
+    lon_range = max_lon - min_lon or 1e-6
+
+    counts = {}
+    for r in rows:
+        ci = min(int((r['latitude'] - min_lat) / lat_range * grid_size), grid_size - 1)
+        cj = min(int((r['longitude'] - min_lon) / lon_range * grid_size), grid_size - 1)
+        counts[(ci, cj)] = counts.get((ci, cj), 0) + 1
+
+    max_count = max(counts.values())
+    cells = []
+    for (ci, cj), count in counts.items():
+        centroid_lat = min_lat + (ci + 0.5) / grid_size * lat_range
+        centroid_lon = min_lon + (cj + 0.5) / grid_size * lon_range
+        cells.append({"lat": centroid_lat, "lon": centroid_lon, "count": count})
+
+    return jsonify({"cells": cells, "max_count": max_count})
+
+
 @app.route('/', defaults={'path': ''})
 @app.route('/<path:path>')
 def serve(path):

@@ -1,4 +1,6 @@
 import React, { useMemo, useEffect, useState } from 'react';
+import L from 'leaflet';
+import 'leaflet.heat';
 import { MapContainer, TileLayer, Polygon, CircleMarker, Tooltip, useMap } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import '../map.css';
@@ -49,6 +51,17 @@ const FitBounds = ({ bounds }) => {
     return null;
 };
 
+function HeatmapLayer({ points }) {
+    const map = useMap();
+    useEffect(() => {
+        if (!points.length) return;
+        const heat = L.heatLayer(points, { radius: 25, blur: 15, maxZoom: 17 });
+        heat.addTo(map);
+        return () => heat.remove();
+    }, [map, points]);
+    return null;
+}
+
 // Find the best-matching weekly territory entry for the selected date
 const findTerritoryForDate = (territories, selectedDate) => {
     if (!territories || territories.length === 0) return null;
@@ -79,13 +92,18 @@ const findTerritoryForDate = (territories, selectedDate) => {
 // Convert [lon, lat] stored coords to Leaflet [lat, lon]
 const swapCoords = (ring) => ring.map(([lon, lat]) => [lat, lon]);
 
-const TerritoryMap = ({ gpsPoints, zones, territory, viewType, catName, historyEndDate }) => {
+const TerritoryMap = ({ gpsPoints, zones, territory, viewType, catName, historyEndDate, historyStartDate }) => {
     const [tileStyle, setTileStyle] = useState('map');
 
     // Alpha shape territory from DB
     const [weeklyTerritories, setWeeklyTerritories] = useState([]);
     const [territoryLoading, setTerritoryLoading] = useState(false);
     const [territoryFetched, setTerritoryFetched] = useState(null); // track which cat was fetched
+
+    // Heatmap state
+    const [heatmapCells, setHeatmapCells] = useState([]);
+    const [heatmapMaxCount, setHeatmapMaxCount] = useState(1);
+    const [heatmapLoading, setHeatmapLoading] = useState(false);
 
     useEffect(() => {
         if (viewType !== 'territory' || !catName) return;
@@ -110,7 +128,31 @@ const TerritoryMap = ({ gpsPoints, zones, territory, viewType, catName, historyE
     useEffect(() => {
         setTerritoryFetched(null);
         setWeeklyTerritories([]);
+        setHeatmapCells([]);
     }, [catName]);
+
+    // Fetch heatmap data when viewType is 'heatmap'
+    useEffect(() => {
+        if (viewType !== 'heatmap' || !catName) return;
+        setHeatmapLoading(true);
+        const end = historyEndDate instanceof Date ? historyEndDate : new Date(historyEndDate || Date.now());
+        const start = historyStartDate instanceof Date
+            ? historyStartDate
+            : new Date(end.getTime() - 90 * 24 * 60 * 60 * 1000);
+        fetch(
+            `${API_BASE_URL}/api/history/heatmap?cat_name=${encodeURIComponent(catName)}&start_date=${start.toISOString()}&end_date=${end.toISOString()}`
+        )
+            .then(r => r.json())
+            .then(data => {
+                setHeatmapCells(data.cells || []);
+                setHeatmapMaxCount(data.max_count || 1);
+            })
+            .catch(err => {
+                console.error('Failed to fetch heatmap data:', err);
+                setHeatmapCells([]);
+            })
+            .finally(() => setHeatmapLoading(false));
+    }, [viewType, catName, historyEndDate, historyStartDate]);
 
     const alphaShapeEntry = useMemo(() => {
         if (viewType !== 'territory') return null;
@@ -130,6 +172,11 @@ const TerritoryMap = ({ gpsPoints, zones, territory, viewType, catName, historyE
         }
     }, [alphaShapeEntry]);
 
+    const heatPoints = useMemo(() => {
+        if (viewType !== 'heatmap') return [];
+        return heatmapCells.map(c => [c.lat, c.lon, c.count / (heatmapMaxCount || 1)]);
+    }, [heatmapCells, heatmapMaxCount, viewType]);
+
     const bounds = useMemo(() => {
         const coords = [
             ...gpsPoints.map(p => [p.lat, p.lon]),
@@ -144,7 +191,7 @@ const TerritoryMap = ({ gpsPoints, zones, territory, viewType, catName, historyE
 
     const sampledPoints = useMemo(() => downsample(gpsPoints, 600), [gpsPoints]);
     const zoneEntries = Object.entries(zones);
-    const hasData = gpsPoints.length > 0 || zoneEntries.length > 0 || territory.length > 0 || alphaPositions !== null;
+    const hasData = gpsPoints.length > 0 || zoneEntries.length > 0 || territory.length > 0 || alphaPositions !== null || heatmapCells.length > 0;
     const isSatellite = tileStyle === 'satellite';
     const tile = TILE_LAYERS[tileStyle];
 
@@ -206,6 +253,10 @@ const TerritoryMap = ({ gpsPoints, zones, territory, viewType, catName, historyE
                         }}
                     />
                 )}
+
+                {viewType === 'heatmap' && heatPoints.length > 0 && (
+                    <HeatmapLayer points={heatPoints} />
+                )}
             </MapContainer>
 
             {/* Tile layer toggle — top-right corner, above Leaflet controls */}
@@ -231,13 +282,19 @@ const TerritoryMap = ({ gpsPoints, zones, territory, viewType, catName, historyE
                 </div>
             )}
 
+            {heatmapLoading && (
+                <div className="absolute inset-0 flex items-center justify-center bg-white bg-opacity-70 text-gray-500 text-sm" style={{ zIndex: 1002 }}>
+                    Loading heatmap data...
+                </div>
+            )}
+
             {(noTerritoryForPeriod || noTerritoryAtAll) && (
                 <div className="absolute inset-0 flex items-center justify-center bg-gray-50 bg-opacity-80 text-gray-500 text-sm" style={{ zIndex: 1002 }}>
                     No territory data for this period
                 </div>
             )}
 
-            {!hasData && !territoryLoading && viewType !== 'territory' && (
+            {!hasData && !territoryLoading && !heatmapLoading && viewType !== 'territory' && viewType !== 'heatmap' && (
                 <div className="absolute inset-0 flex items-center justify-center bg-gray-50 text-gray-500 text-sm">
                     No GPS data available for this window.
                 </div>
