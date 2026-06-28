@@ -96,7 +96,15 @@ def compute_territory(pings, alpha=1500):
     # alphashape expects (x, y) = (lon, lat) order.
     points = [(lon, lat) for lat, lon in pings]
 
-    shape = alphashape.alphashape(points, alpha)
+    try:
+        shape = alphashape.alphashape(points, alpha)
+    except Exception as e:
+        print(
+            f"territory.py: alphashape raised {type(e).__name__}: {e}. "
+            "Likely degenerate/collinear input. Returning None.",
+            file=sys.stderr,
+        )
+        return None
 
     # Normalise MultiPolygon → largest Polygon.
     if isinstance(shape, MultiPolygon):
@@ -125,9 +133,17 @@ def compute_territory(pings, alpha=1500):
     for ring in shape.interiors:
         holes.append([[lon, lat] for lon, lat in ring.coords])
 
-    # Compute area via equirectangular projection to metres.
-    projected = _project_to_metres(shape)
-    area_m2 = projected.area
+    try:
+        # Compute area via equirectangular projection to metres.
+        projected = _project_to_metres(shape)
+        area_m2 = projected.area
+    except Exception as e:
+        print(
+            f"territory.py: area projection raised {type(e).__name__}: {e}. "
+            "Returning None.",
+            file=sys.stderr,
+        )
+        return None
 
     return {
         "polygon_json": json.dumps(outer_coords),

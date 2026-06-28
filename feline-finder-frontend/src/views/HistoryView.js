@@ -121,12 +121,21 @@ const HistoryView = ({ catNames, knownZones }) => {
 
         const fetchOverlap = async () => {
             setOverlapLoading(true);
-            // Find the most recent period_start across both cats' trend arrays
-            const allPeriods = [
-                ...arthurTrend.map(t => t.period_start),
-                ...kingTrend.map(t => t.period_start),
-            ].sort();
-            const periodStart = allPeriods[allPeriods.length - 1];
+            // Find the most recent period_start that exists in BOTH cats' trend arrays.
+            // King's backfill may lag Arthur's, so using Arthur's latest alone can
+            // produce "Data unavailable for King". Fall back to Arthur's latest if
+            // there is no shared period at all.
+            const arthurPeriods = new Set(arthurTrend.map(t => t.period_start));
+            const sharedPeriods = kingTrend
+                .map(t => t.period_start)
+                .filter(p => arthurPeriods.has(p))
+                .sort();
+            const sharedPeriodStart = sharedPeriods[sharedPeriods.length - 1];
+
+            const arthurPeriodsSorted = arthurTrend.map(t => t.period_start).sort();
+            const fallbackPeriodStart = arthurPeriodsSorted[arthurPeriodsSorted.length - 1];
+
+            const periodStart = sharedPeriodStart || fallbackPeriodStart;
             if (!periodStart) {
                 setOverlapLoading(false);
                 return;
