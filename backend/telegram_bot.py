@@ -150,22 +150,55 @@ def get_activity_summary(start_dt, end_dt):
                     (end_dt - outside_since).total_seconds() / 3600, 1
                 )
 
-            # Last GPS fix
+            # All GPS points in window
             cur.execute(
                 """
                 SELECT latitude, longitude, timestamp FROM tractive_gps_positions
-                WHERE internal_cat_id = ? AND timestamp <= ?
-                ORDER BY timestamp DESC LIMIT 1
+                WHERE internal_cat_id = ? AND timestamp >= ? AND timestamp <= ?
+                ORDER BY timestamp ASC
                 """,
-                (cat_id, end_dt.isoformat()),
+                (cat_id, start_dt.isoformat(), end_dt.isoformat()),
             )
-            last_gps = cur.fetchone()
-            last_known_zone = None
-            last_gps_at = None
-            if last_gps:
-                lat, lon = float(last_gps["latitude"]), float(last_gps["longitude"])
-                last_known_zone = _ZONE_INDEX.locate(lat, lon) or "Unknown area"
-                last_gps_at = _parse_ts(last_gps["timestamp"]).strftime("%H:%M")
+            gps_points = [
+                (float(r["latitude"]), float(r["longitude"]), _parse_ts(r["timestamp"]))
+                for r in cur.fetchall()
+            ]
+
+            # Zone visit sequence with durations
+            zone_segments = []
+            total_distance_km = 0.0
+            if gps_points:
+                def _add_seg(zone, secs):
+                    if not zone or secs <= 0:
+                        return
+                    if zone_segments and zone_segments[-1]["zone"] == zone:
+                        zone_segments[-1]["duration_min"] += secs / 60
+                    else:
+                        zone_segments.append({"zone": zone, "duration_min": secs / 60})
+
+                for (lat1, lon1, t1), (lat2, lon2, t2) in zip(gps_points, gps_points[1:]):
+                    secs = max(0, (t2 - t1).total_seconds())
+                    dlat = abs(lat2 - lat1) * 111000
+                    dlon = abs(lon2 - lon1) * 111000 * 0.7
+                    total_distance_km += ((dlat**2 + dlon**2) ** 0.5) / 1000
+                    za = _ZONE_INDEX.locate(lat1, lon1)
+                    zb = _ZONE_INDEX.locate(lat2, lon2)
+                    if za == zb:
+                        _add_seg(za, secs)
+                    else:
+                        _add_seg(za, secs // 2)
+                        _add_seg(zb, secs - secs // 2)
+
+                for seg in zone_segments:
+                    seg["duration_min"] = round(seg["duration_min"])
+
+                # Last known position
+                last_lat, last_lon, last_ts = gps_points[-1]
+                last_known_zone = _ZONE_INDEX.locate(last_lat, last_lon) or "Unknown area"
+                last_gps_at = last_ts.strftime("%H:%M")
+            else:
+                last_known_zone = None
+                last_gps_at = None
 
             notable = []
             if continuously_outside_h is not None and continuously_outside_h > 3:
@@ -179,6 +212,8 @@ def get_activity_summary(start_dt, end_dt):
                 "last_known_zone": last_known_zone,
                 "last_gps_at": last_gps_at,
                 "last_transition": last_transition,
+                "zones_visited": zone_segments,
+                "total_distance_km": round(total_distance_km, 2),
                 "notable_events": notable,
             }
 
@@ -187,36 +222,47 @@ def get_activity_summary(start_dt, end_dt):
 
 # ── AI summary ────────────────────────────────────────────────────────────────
 def generate_summary(window_hours=12):
-    """Collects data for the past window_hours and returns an AI-written summary string."""
+    """Collects data for the past window_hours and returns {cat_name: summary_text}."""
     tz = pytz.timezone("Europe/Zurich")
     end = dt.datetime.now(tz)
     start = end - dt.timedelta(hours=window_hours)
     data = get_activity_summary(start, end)
-    data["_window"] = {
+    window = {
         "from": start.strftime("%Y-%m-%d %H:%M"),
         "to": end.strftime("%Y-%m-%d %H:%M"),
     }
 
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-    response = client.messages.create(
-        model="claude-haiku-4-5-20251001",
-        max_tokens=300,
-        system=(
-            "You write short, warm activity summaries for a cat monitoring app. "
-            "Cover both cats in 2-4 sentences. Be friendly and specific — mention "
-            "actual zones, durations, or events from the data. No bullet points."
-        ),
-        messages=[{"role": "user", "content": json.dumps(data, indent=2)}],
-    )
-    return response.content[0].text
+    summaries = {}
+
+    for cat_name, cat_data in data.items():
+        payload = {cat_name: cat_data, "_window": window}
+        response = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=600,
+            system=(
+                "You write activity summaries for a cat monitoring app. "
+                "Be warm and specific — mention actual zones, durations, transitions, "
+                "and anything that might interest the owner (e.g. an unusually long outing, "
+                "a cat that hasn't gone out at all, repeated trips in quick succession, "
+                "time spent in a favourite or unusual spot). Include everything genuinely "
+                "useful; don't cut detail just to be brief."
+            ),
+            messages=[{"role": "user", "content": json.dumps(payload, indent=2)}],
+        )
+        summaries[cat_name] = response.content[0].text
+
+    return summaries
 
 
 # ── Telegram handlers ─────────────────────────────────────────────────────────
 async def summary_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     status = await update.message.reply_text("Fetching summary...")
     try:
-        text = generate_summary()
-        await status.edit_text(text)
+        summaries = generate_summary()
+        await status.delete()
+        for text in summaries.values():
+            await update.message.reply_text(text)
     except Exception as e:
         logger.error(f"Error in /summary: {e}")
         await status.edit_text("Sorry, couldn't generate the summary right now.")
@@ -224,8 +270,9 @@ async def summary_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 async def scheduled_summary(context: ContextTypes.DEFAULT_TYPE) -> None:
     try:
-        text = generate_summary()
-        await context.bot.send_message(chat_id=int(TELEGRAM_CHAT_ID), text=text)
+        summaries = generate_summary()
+        for text in summaries.values():
+            await context.bot.send_message(chat_id=int(TELEGRAM_CHAT_ID), text=text)
         logger.info("Scheduled summary sent.")
     except Exception as e:
         logger.error(f"Error in scheduled summary: {e}")
