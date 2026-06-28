@@ -43,6 +43,7 @@ feline-finder-frontend/build/
 
 # Passwords and configs
 /backend/config.py
+/backend/telegram_bot_config.py
 /backend/api_exploration/surepet_json_extract.txt
 /backend/api_exploration/tractive_api_notes.md
 

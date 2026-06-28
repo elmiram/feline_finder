@@ -192,14 +192,14 @@ def load_users(conn) -> dict:
     return out
 
 def load_last_state_before(conn, since: dt.datetime) -> dict:
-    """Determine initial inside/outside per cat from the last stateful surepet event before SINCE."""
+    """Determine initial inside/outside per cat from the last stateful surepet event before since."""
     cur = conn.cursor()
     cur.execute(f"""
         SELECT {SP_COL_CAT_ID} AS cid, {SP_COL_SRC} AS src, {SP_COL_DIR} AS dir, {SP_COL_TIME} AS t
         FROM {SUREPET_TABLE}
         WHERE {SP_COL_TIME} < ?
         ORDER BY {SP_COL_TIME} DESC
-    """, (SINCE.isoformat(),))
+    """, (since.isoformat(),))
     initial = {}
     seen = set()
     for r in cur.fetchall():
@@ -308,7 +308,12 @@ def summarize_outdoor(points, zone_index: ZoneIndex):
 
 
 # --------- Timeline builder ----------
-def build_timelines(surepet_rows, gps_by_cat, zone_index, cats_map, users_map, initial_state):
+def build_timelines(surepet_rows, gps_by_cat, zone_index, cats_map, users_map, initial_state, since=None, now=None):
+    if since is None:
+        since = SINCE
+    if now is None:
+        now = NOW
+
     per_cat_sp = defaultdict(list)
     for e in surepet_rows:
         per_cat_sp[e["cat_id"]].append(e)
@@ -335,7 +340,7 @@ def build_timelines(surepet_rows, gps_by_cat, zone_index, cats_map, users_map, i
         instants.sort(key=lambda x: x[0])
 
         state = initial_state.get(cid, "unknown")
-        ptr = SINCE
+        ptr = since
 
         timeline = []
 
@@ -343,7 +348,7 @@ def build_timelines(surepet_rows, gps_by_cat, zone_index, cats_map, users_map, i
             return [p for p in gps if t0 <= p.t <= t1]
 
         for t, src, direction, user_id in instants:
-            if t < SINCE or t > NOW:
+            if t < since or t > now:
                 continue
 
             if ptr < t:
@@ -375,19 +380,19 @@ def build_timelines(surepet_rows, gps_by_cat, zone_index, cats_map, users_map, i
                 state = ns
             ptr = t
 
-        if ptr < NOW:
+        if ptr < now:
             if state == "outside":
-                pts = gps_between(ptr, NOW)
+                pts = gps_between(ptr, now)
                 dist, zones_seq = summarize_outdoor(pts, zone_index)
                 timeline.append({
                     "_start": ptr,
-                    "_end": NOW,
+                    "_end": now,
                     "event": "Outdoor Adventure",
                     "distance_km": dist,
                     "zones_visited": zones_seq
                 })
             elif state == "inside":
-                timeline.append({"_start": ptr, "_end": NOW, "event": "At Home"})
+                timeline.append({"_start": ptr, "_end": now, "event": "At Home"})
 
         merged = timeline + standalone
 
@@ -409,6 +414,32 @@ def build_timelines(surepet_rows, gps_by_cat, zone_index, cats_map, users_map, i
                 rendered.append(out)
 
         timelines[cat_name] = rendered
+
+    return timelines
+
+
+# --------- Public API ---------
+def get_timelines(start_dt: dt.datetime, end_dt: dt.datetime, active_cats: set | None = None) -> dict:
+    """
+    Build event-log timelines for an arbitrary time window.
+    Returns {cat_name: [event_list]} in the same rendered format as build_timelines.
+    active_cats: optional set of cat names to include (e.g. {"Arthur", "King"}).
+    """
+    zone_index = ZoneIndex(KNOWN_ZONES)
+    with connect() as conn:
+        cats_map = load_cat_names(conn)
+        users_map = load_users(conn)
+        initial = load_last_state_before(conn, start_dt)
+        sp_rows = load_surepet_events(conn, start_dt, end_dt)
+        gps_by_cat = load_tractive_points(conn, start_dt, end_dt)
+
+    timelines = build_timelines(
+        sp_rows, gps_by_cat, zone_index, cats_map, users_map, initial,
+        since=start_dt, now=end_dt,
+    )
+
+    if active_cats:
+        timelines = {name: events for name, events in timelines.items() if name in active_cats}
 
     return timelines
 
