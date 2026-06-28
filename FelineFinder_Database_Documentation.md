@@ -137,7 +137,85 @@ SELECT ROUND(AVG(time_offset) / 60.0, 1) || 'h' FROM tractive_sleep_phases WHERE
 
 ---
 
-## 9. `surepet_events`
+## 8. `cat_territories`
+
+Pre-computed alpha shape territory polygons for each cat, per week and per calendar month. Populated by `territory_compute.py` (batch backfill) and updated by the daily collector.
+
+| Column Name      | Data Type | Constraints                                          | Description |
+|------------------|-----------|------------------------------------------------------|-------------|
+| id               | INTEGER   | PRIMARY KEY AUTOINCREMENT                            | Unique row ID. |
+| internal_cat_id  | INTEGER   | NOT NULL                                             | Foreign key to `cat_identities.internal_cat_id`. |
+| period_type      | TEXT      | NOT NULL                                             | `'week'` or `'month'`. |
+| period_start     | TEXT      | NOT NULL                                             | ISO date: Monday for weeks, 1st for months. |
+| period_end       | TEXT      | NOT NULL                                             | ISO date: Sunday for weeks, last day for months. |
+| polygon_json     | TEXT      | NOT NULL                                             | JSON string of `[[lon, lat], ...]` — outer boundary ring. Coordinates in GeoJSON `[lon, lat]` order. |
+| holes_json       | TEXT      |                                                      | JSON string of list of rings (each `[[lon, lat], ...]`) for inner holes, or NULL. |
+| area_m2          | REAL      |                                                      | Territory area in m² (outer polygon minus holes), using equirectangular projection at lat 47.166. |
+| area_change_pct  | REAL      |                                                      | % change vs previous period of same type. NULL for the first period. |
+| ping_count       | INTEGER   |                                                      | Number of GPS pings used to compute this territory. |
+| computed_at      | TEXT      | NOT NULL                                             | UTC datetime when this row was computed. |
+| UNIQUE           |           | (internal_cat_id, period_type, period_start)         | One territory per cat per period. |
+
+**Alpha parameter**: α=1500, validated against Tractive's W26 2026 territory for Arthur. **Min ping threshold**: 50 pings — weeks below this are skipped. Degenerate/collinear inputs (qhull errors) are caught and skipped.
+
+---
+
+## 9. `farthest_point_exclusions`
+
+Per-cat date ranges to exclude from the farthest-point-from-home calculation (e.g. vet visits).
+
+| Column Name     | Data Type | Constraints               | Description |
+|-----------------|-----------|---------------------------|-------------|
+| id              | INTEGER   | PRIMARY KEY AUTOINCREMENT | Unique row ID. |
+| internal_cat_id | INTEGER   | NOT NULL                  | Foreign key to `cat_identities.internal_cat_id`. |
+| date_from       | TEXT      | NOT NULL                  | Start of exclusion range (YYYY-MM-DD). |
+| date_to         | TEXT      | NOT NULL                  | End of exclusion range (YYYY-MM-DD, inclusive). |
+| reason          | TEXT      |                           | Optional label (e.g. "Vet visit"). |
+
+Managed via `GET/POST/DELETE /api/stats/farthest/exclusions` and the Settings tab UI.
+
+---
+
+## 10. `weather_daily`
+
+One row per calendar date with daily weather summary for Finstersee (lat 47.166, lon 8.628), fetched from Open-Meteo archive API. Used for weather correlation analysis.
+
+| Column Name   | Data Type | Constraints    | Description |
+|---------------|-----------|----------------|-------------|
+| date          | TEXT      | PRIMARY KEY    | Local date in `YYYY-MM-DD` format (Europe/Zurich timezone). |
+| temp_max      | REAL      |                | Daily maximum temperature in °C. |
+| temp_min      | REAL      |                | Daily minimum temperature in °C. |
+| precipitation | REAL      |                | Precipitation sum in mm. |
+| snowfall      | REAL      |                | Snowfall sum in cm. |
+| weathercode   | INTEGER   |                | WMO weather code (0=clear sky, 3=overcast, 61=rain, 71=snow, etc.). Stored raw; decode in frontend. |
+| sunrise       | TEXT      |                | Sunrise datetime string (ISO, Europe/Zurich). |
+| sunset        | TEXT      |                | Sunset datetime string (ISO, Europe/Zurich). |
+
+Backfilled 2024-03-01 → present (850 rows) by `weather_backfill.py`. Updated daily at 07:00 by `weather_collector.py` via systemd user timer.
+
+---
+
+## 11. `cat_trips`
+
+One row per detected outdoor trip, computed by merging SurePet flap events and GPS signals. Used by all activity pattern analysis endpoints.
+
+| Column Name      | Data Type | Constraints                              | Description |
+|------------------|-----------|------------------------------------------|-------------|
+| id               | INTEGER   | PRIMARY KEY AUTOINCREMENT                | Unique row ID. |
+| internal_cat_id  | INTEGER   | NOT NULL                                 | Foreign key to `cat_identities.internal_cat_id`. |
+| start_time       | TEXT      | NOT NULL                                 | UTC datetime when the cat went outside. |
+| end_time         | TEXT      |                                          | UTC datetime when the cat returned home. NULL if trip is still open. |
+| duration_minutes | REAL      |                                          | Stored for query convenience. NULL if trip is open. |
+| start_source     | TEXT      |                                          | How the trip start was detected: `'surepet_exit'`, `'gps_outdoor'`, or `'inferred'`. |
+| end_source       | TEXT      |                                          | How the trip end was detected: `'surepet_entry'`, `'wifi_home'`, `'gps_home'`, or `'inferred'`. |
+| confidence       | TEXT      |                                          | `'high'` (both ends SurePet flap), `'medium'` (one end flap), `'low'` (both ends GPS/WiFi inferred). |
+| UNIQUE           |           | (internal_cat_id, start_time)            | One trip per cat per start time. |
+
+**Important**: Trips with `duration_minutes > 1440` (24h) are tracker-offline data gaps misinterpreted as open trips — filter these out in queries. Use `AND duration_minutes <= 1440` for analysis. Backfilled by `trip_compute.py` (16,875 trips: Arthur 5,088 / King 7,842 / Trixie 3,945).
+
+---
+
+## 12. `surepet_events`
 
 Stores event data from the SurePet timeline.
 
@@ -152,7 +230,7 @@ Stores event data from the SurePet timeline.
 
 ---
 
-## 10. `devices`
+## 13. `devices`
 
 Stores the status of SurePet hardware (flap, hub, etc.).
 
@@ -166,7 +244,7 @@ Stores the status of SurePet hardware (flap, hub, etc.).
 
 ---
 
-## 11. `surepet_users`
+## 14. `surepet_users`
 
 Stores information about SurePet users.
 

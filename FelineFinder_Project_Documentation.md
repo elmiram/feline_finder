@@ -25,9 +25,17 @@ The backend is responsible for all data collection, storage, and processing. It 
 - `health_collector.py`: Daily collector (run by `health_collector.timer` at 06:00) that fetches yesterday's activity and sleep data for Arthur and King from `graph.tractive.com/4`. Writes to `tractive_health_daily`, `tractive_hourly_activity`, and `tractive_sleep_phases`.
 - `health_backfill.py`: One-off script that fetches full health/sleep history from 2024-03-01 to today for Arthur and King. Resumable, zero-tolerant, exponential backoff per date.
 - `tractive_collector.py` & `surepet_collector.py`: Long-running data collection services. Each runs in a continuous loop fetching new data from its respective API. `tractive_collector` re-reads active trackers from the database each cycle, so tracker changes take effect without a restart.
+- `territory.py`: Alpha shape territory computation library. `grid_filter(pings, cell_size_m, min_count)` removes sparse pings; `compute_territory(pings, alpha=1500)` returns outer polygon + holes + area. Used by `territory_compute.py` and can be called on demand.
+- `territory_compute.py`: Batch backfill script. Computes weekly (Mon–Sun) and monthly territory polygons for all cats and inserts into `cat_territories`. Resumable via `INSERT OR IGNORE`. Safe to re-run.
+- `zone_utils.py`: Shared zone-labelling helper using Shapely prepared geometry. `label_pings(pings, known_zones)` is ~10× faster than a naive ray-cast loop, making it viable for 130k+ ping datasets.
+- `location_state.py`: Shared "is the cat home?" confidence engine. Merges SurePet flap events and GPS/WiFi signals into a unified timeline, applies 10-minute bounce suppression, and extracts trips. Used by `trip_compute.py` and the live dashboard refresh logic in `api_server.py`.
+- `trip_compute.py`: Batch backfill script. Runs `location_state.compute_trips()` for all cats and inserts results into `cat_trips`. Resumable.
+- `weather_backfill.py`: One-off script that fetches all historical weather from Open-Meteo archive API (2024-03-01 → today). Free, no API key required. Inserts into `weather_daily`.
+- `weather_collector.py`: Daily script (run by `weather_collector.timer` at 07:00) that fetches yesterday's weather and upserts into `weather_daily`.
 - `api_server.py`: A Flask web server with two roles:
-  - **API Provider**: Exposes JSON endpoints the frontend calls. Contains the Confidence Engine, zone detection, territory polygon calculation (DBSCAN + convex hull), and tracker management logic.
+  - **API Provider**: Exposes JSON endpoints the frontend calls. Contains the Confidence Engine, zone detection, territory polygon calculation, tracker management, and all analysis endpoints listed in §3.2.
   - **Web Server**: Serves the built React application from `../feline-finder-frontend/build/`.
+  - **Startup**: Must be launched from `~/projects/feline_finder/backend/` — `config.py` uses a relative path for the DB. Rolling P95 trip durations for the anomaly flag are computed at startup.
 
 ### 2.2. Deployment & Execution
 
@@ -54,6 +62,7 @@ sudo systemctl status tractive_collector.service
 sudo systemctl status surepet_collector.service
 sudo systemctl status api_server.service
 sudo systemctl status health_collector.timer
+systemctl --user status weather_collector.timer   # runs as user, not root
 ```
 
 **Viewing Logs**
@@ -124,25 +133,33 @@ The frontend code is organized into a modular structure to improve maintainabili
 
 #### Live Dashboard
 
-- **Functionality**: Status card per cat (e.g., "At Home", "Outside"), battery level, confidence level, last 5 SurePet flap events, and last 5 GPS zone transitions. Grid layout adapts to the number of active cats.
-- **API Endpoints**: `GET /api/status`, `GET /api/cats`
+- **Functionality**: Status card per cat ("At Home", "Outside"), battery level, confidence level, last 5 SurePet flap events, last 5 GPS zone transitions. If a cat has been outside longer than the rolling 95th-percentile trip duration (computed over both 28-day and 7-day windows), the card shows an amber border and "Outside longer than usual" warning.
+- **API Endpoints**: `GET /api/status` (includes `long_absence_flag`, `current_outdoor_duration_minutes`), `GET /api/cats`
 
 #### Historical Analysis
 
-- **Functionality**: Select any cat (including inactive ones) and a time window. Use a timeline slider to explore the past year. Includes:
-  - **Territory Map**: Plots GPS points over known zones, with DBSCAN-computed convex hull territory polygon.
-  - **Time Allocation Chart**: Shows time spent indoors vs. outdoors.
-- **API Endpoints**: `GET /api/history/gps`, `GET /api/history/events`, `GET /api/zones`
+Opens with **"All Cats"** selected in **Territory** view by default. Cat selector includes Arthur, King, Trixie, and "All Cats". All-Cats mode is only available in Territory view (auto-reverts to Arthur in Points/Heatmap).
 
-**Note**: Once data is fetched, all subsequent interaction is handled locally in-browser.
+- **Territory Map** (default view): Renders pre-computed alpha shape polygons from `cat_territories` DB table. In All-Cats mode, shows all three cats' territories simultaneously (amber / purple / teal). 300ms slider debounce. Falls back to "No territory data" if none computed for the period.
+- **Heatmap view**: GPS ping density grid via `leaflet.heat`. Excludes KNOWN_WIFI pings.
+- **Points view**: Raw GPS dots over known zone polygons.
+- **Territory Area Trend**: Line chart of territory area (km²) over time for Arthur and King, from pre-computed weekly/monthly rows.
+- **Territory Overlap**: Arthur ∩ King overlap % for the most recent shared period.
+- **Record Distance from Home**: Per-cat all-time farthest GPS ping from home centroid (excluding configured exclusion dates), shown with date.
+- **Zone Dwell Time**: Horizontal bar chart of time spent per zone in the selected window. Click any bar to open a monthly % trend modal.
+- **Activity Patterns** (Arthur/King/Trixie selector):
+  - 24-hour activity bar chart (fraction of days with outdoor time per hour)
+  - Seasonal outdoor hours line chart (rolling 7-day average across full history)
+  - Temperature vs outdoor hours scatter (dots coloured by weathercode bucket)
+- **API Endpoints**: `GET /api/history/gps`, `GET /api/history/events`, `GET /api/history/heatmap`, `GET /api/zones`, `GET /api/territory/trend`, `GET /api/territory/weekly`, `GET /api/territory/overlap`, `GET /api/stats/farthest`, `GET /api/zones/dwell`, `GET /api/zones/trend`, `GET /api/trips`, `GET /api/activity/hourly`, `GET /api/activity/seasonal`, `GET /api/activity/weather_correlation`, `GET /api/activity/survival`
 
-#### Settings — Tracker Management
+#### Settings
 
-- **Functionality**: Per-cat cards showing full tracker history (active and retired). Assign a new tracker ID when a collar is replaced; optionally provide the date it was lost to set the correct retirement date and backfill start. Re-activate a previously retired tracker with an optional gap-start date override.
+- **Tracker Management**: Per-cat tracker history, assign/reactivate trackers with background backfill.
+- **Farthest Point Exclusions**: Per-cat table of date ranges to exclude from the record distance calculation (e.g. vet trips). Add/remove via form.
 - **API Endpoints**:
-  - `GET /api/trackers` — returns per-cat tracker history
-  - `POST /api/trackers/assign` — body: `{cat_name, tracker_id, lost_date?}` — retires current tracker, assigns new one, triggers background backfill
-  - `POST /api/trackers/reactivate` — body: `{cat_name, tracker_id, lost_date?}` — retires current tracker, re-activates old one, backfills the gap only
+  - `GET /api/trackers`, `POST /api/trackers/assign`, `POST /api/trackers/reactivate`
+  - `GET /api/stats/farthest/exclusions`, `POST /api/stats/farthest/exclusions`, `DELETE /api/stats/farthest/exclusions/<id>`
 
 ### 3.3. Deployment & Execution
 

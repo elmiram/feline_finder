@@ -8,12 +8,18 @@ FelineFinder integrates data from Tractive GPS trackers and SurePet smart cat fl
 
 ## ✨ Features
 
--   **Live Dashboard**: At-a-glance status for each cat ("At Home", "Outside", "In Driveway Zone"), including battery levels, recent flap events, and recent zone changes.
--   **Confidence Engine**: A smart backend engine that analyzes conflicting data from multiple sources to determine the most probable, accurate status.
--   **Historical Analysis**: An interactive map view to explore your cat's GPS history and territory over custom time windows.
+-   **Live Dashboard**: At-a-glance status for each cat ("At Home", "Outside", "In Driveway Zone"), including battery levels, recent flap events, and recent zone changes. Amber alert when a cat has been outside longer than their recent historical norm.
+-   **Confidence Engine**: A smart backend engine that analyzes conflicting data from multiple sources (GPS, WiFi, cat flap events) to determine the most probable, accurate status.
+-   **Territory Analysis**: Pre-computed alpha shape territory polygons (weekly + monthly) stored in the DB. View all cats' territories simultaneously on the same map. Territory area trend chart and Arthur ∩ King overlap stat.
+-   **Favourite Spots Heatmap**: GPS ping density map using `leaflet.heat`, showing where each cat actually spends time within their territory.
+-   **Zone Dwell Time**: Time spent per named zone for any date range, with monthly trend charts showing how zone preferences evolve across seasons.
+-   **Farthest Point from Home**: All-time record excursion distance per cat, with configurable exclusion dates (e.g. vet visits).
+-   **Activity Patterns**: 24-hour activity chart, seasonal outdoor hours trend (rolling 7-day average), and temperature/weather correlation scatter plot.
+-   **Trip Statistics**: 16,000+ outdoor trips detected by merging SurePet flap events and GPS signals. Survival curve analysis ("what's the probability King is still out after 2 hours?").
+-   **Weather Correlation**: Historical weather (Open-Meteo, free, no API key) joined with trip data. See whether your cats stay in when it rains.
 -   **Event Log**: A real-time log of cat flap entries/exits, manual location settings, and GPS zone transitions.
 -   **Zone Mapping**: Define custom zones (e.g., "Garden", "Neighbor's Yard") and see them visualized on the map.
--   **Tracker Management**: A Settings tab for reassigning a new tracker ID when a collar is lost or replaced. Automatically backfills historical GPS data in the background. Supports re-activating a recovered tracker with gap-only backfill.
+-   **Tracker Management**: A Settings tab for reassigning a new tracker ID when a collar is lost or replaced. Automatically backfills historical GPS data in the background.
 -   **Self-Hosted & Private**: All your data is stored locally in a SQLite database. No reliance on third-party cloud services for data aggregation.
 -   **Robust & Autonomous**: Core components run as auto-restarting system services for maximum uptime.
 
