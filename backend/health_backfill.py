@@ -105,7 +105,7 @@ def store_day(conn, internal_cat_id, date_str, activity, sleep):
         hourly_dist    = activity.get('hourly_distribution', [])
         dist_list = activity.get('activity_distribution', [])
         if isinstance(dist_list, list):
-            dist_map = {item.get('type'): item for item in dist_list if isinstance(item, dict)}
+            dist_map = {item.get('category') or item.get('type'): item for item in dist_list if isinstance(item, dict)}
         else:
             dist_map = dist_list if isinstance(dist_list, dict) else {}
         resting_hours = dist_map.get('resting', {}).get('current')
@@ -176,21 +176,22 @@ async def run():
     today = datetime.date.today()
     log(f"Backfill: {BACKFILL_START} → {today} for {list(cat_info.keys())}")
 
-    async with Tractive(TRACTIVE_EMAIL, TRACTIVE_PASSWORD) as client:
-        await client.authenticate()
-        auth_headers = await client._api.auth_headers()
-        auth_headers['x-tractive-client'] = CLIENT_ID
-        log("Authenticated with Tractive")
+    async with aiohttp.ClientSession() as session:
+        for cat_name, info in cat_info.items():
+            pet_id      = info['pet_id']
+            cat_id      = info['internal_cat_id']
+            stored      = 0
+            skipped_zero = 0
+            skipped_dup  = 0
 
-        async with aiohttp.ClientSession() as session:
-            for cat_name, info in cat_info.items():
-                pet_id      = info['pet_id']
-                cat_id      = info['internal_cat_id']
-                stored      = 0
-                skipped_zero = 0
-                skipped_dup  = 0
+            log(f"\n[{cat_name}] Starting backfill (pet_id={pet_id})")
 
-                log(f"\n[{cat_name}] Starting backfill (pet_id={pet_id})")
+            # Authenticate fresh per cat to avoid token expiry on long runs
+            async with Tractive(TRACTIVE_EMAIL, TRACTIVE_PASSWORD) as client:
+                await client.authenticate()
+                auth_headers = await client._api.auth_headers()
+                auth_headers['x-tractive-client'] = CLIENT_ID
+                log(f"  [{cat_name}] Authenticated with Tractive")
 
                 current = BACKFILL_START
                 while current <= today:
@@ -229,8 +230,8 @@ async def run():
                     current += datetime.timedelta(days=1)
                     await asyncio.sleep(0.3)
 
-                log(f"[{cat_name}] Done. Stored: {stored}, zeros skipped: {skipped_zero}, "
-                    f"already present: {skipped_dup}")
+            log(f"[{cat_name}] Done. Stored: {stored}, zeros skipped: {skipped_zero}, "
+                f"already present: {skipped_dup}")
 
     conn.close()
     log("\nHealth backfill complete!")

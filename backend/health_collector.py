@@ -55,7 +55,7 @@ def upsert_day(conn, internal_cat_id, date_str, activity, sleep):
         hourly_dist    = activity.get('hourly_distribution', [])
         dist_list = activity.get('activity_distribution', [])
         if isinstance(dist_list, list):
-            dist_map = {item.get('type'): item for item in dist_list if isinstance(item, dict)}
+            dist_map = {item.get('category') or item.get('type'): item for item in dist_list if isinstance(item, dict)}
         else:
             dist_map = dist_list if isinstance(dist_list, dict) else {}
         resting_hours = dist_map.get('resting', {}).get('current')   # already in hours
