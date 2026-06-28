@@ -966,6 +966,85 @@ def get_zone_trend():
     return jsonify(result)
 
 
+@app.route('/api/trips')
+def get_trips():
+    """Return trips from cat_trips table plus aggregate stats.
+
+    Query params:
+      cat_name   (required)
+      start_date (optional, YYYY-MM-DD or ISO)
+      end_date   (optional, YYYY-MM-DD or ISO)
+    """
+    cat_name = request.args.get('cat_name')
+    start_date = request.args.get('start_date', '')
+    end_date = request.args.get('end_date', '')
+
+    if not cat_name:
+        return jsonify({"error": "cat_name is required"}), 400
+
+    conn = create_connection()
+    if not conn:
+        return jsonify({"error": "Database connection failed"}), 500
+
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT internal_cat_id FROM cat_identities WHERE cat_name = ?", (cat_name,)
+    )
+    cat_row = cursor.fetchone()
+    if not cat_row:
+        conn.close()
+        return jsonify({"error": f"Cat '{cat_name}' not found"}), 404
+    internal_cat_id = cat_row['internal_cat_id']
+
+    # Build query with optional date filters
+    params = [internal_cat_id]
+    where_clauses = ["internal_cat_id = ?"]
+    if start_date:
+        where_clauses.append("start_time >= ?")
+        params.append(start_date)
+    if end_date:
+        where_clauses.append("start_time <= ?")
+        params.append(end_date)
+
+    query = (
+        "SELECT id, start_time, end_time, duration_minutes, start_source, end_source, confidence "
+        "FROM cat_trips WHERE " + " AND ".join(where_clauses) + " ORDER BY start_time DESC"
+    )
+    cursor.execute(query, params)
+    rows = cursor.fetchall()
+    conn.close()
+
+    trips = [
+        {
+            "id": r['id'],
+            "start_time": r['start_time'],
+            "end_time": r['end_time'],
+            "duration_minutes": r['duration_minutes'],
+            "start_source": r['start_source'],
+            "end_source": r['end_source'],
+            "confidence": r['confidence'],
+        }
+        for r in rows
+    ]
+
+    # Aggregate stats over completed trips only
+    completed = [t["duration_minutes"] for t in trips if t["duration_minutes"] is not None]
+    stats = {"count": len(completed), "median_minutes": None, "max_minutes": None, "min_minutes": None}
+    if completed:
+        completed_sorted = sorted(completed)
+        n = len(completed_sorted)
+        mid = n // 2
+        stats["median_minutes"] = (
+            completed_sorted[mid]
+            if n % 2 == 1
+            else (completed_sorted[mid - 1] + completed_sorted[mid]) / 2.0
+        )
+        stats["max_minutes"] = completed_sorted[-1]
+        stats["min_minutes"] = completed_sorted[0]
+
+    return jsonify({"trips": trips, "stats": stats})
+
+
 @app.route('/', defaults={'path': ''})
 @app.route('/<path:path>')
 def serve(path):
