@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { API_BASE_URL } from '../constants';
 
-const ACTIVE_CATS = ['Arthur', 'King'];
+const ACTIVE_CATS = ['Arthur', 'King', 'Trixie'];
 
 function FarthestExclusionCard({ catName }) {
     const [exclusions, setExclusions] = useState([]);
