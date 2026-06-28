@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { API_BASE_URL } from '../constants';
 
-const ACTIVE_CATS = ['Arthur', 'King', 'Trixie'];
+const CATS_WITH_EXCLUSIONS = ['Arthur', 'King', 'Trixie'];
 
 function FarthestExclusionCard({ catName }) {
     const [exclusions, setExclusions] = useState([]);
@@ -366,7 +366,7 @@ export default function SettingsView() {
                     </p>
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-                    {ACTIVE_CATS.map(catName => (
+                    {CATS_WITH_EXCLUSIONS.map(catName => (
                         <FarthestExclusionCard key={catName} catName={catName} />
                     ))}
                 </div>
