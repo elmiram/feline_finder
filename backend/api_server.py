@@ -33,6 +33,9 @@ from config import KNOWN_ZONES
 
 # --- Farthest-point constants (home centroid, computed from KNOWN_ZONES["Home"] polygon) ---
 HOME_LAT = 47.166391786
+
+# --- Zone label cache (ping→zone labels, invalidated by ping count change) ---
+_zone_label_cache = {}  # {internal_cat_id: {'labels': [...], 'timestamps': [...], 'count': int}}
 HOME_LON = 8.629922381
 
 def _haversine_km(lat1, lon1, lat2, lon2):
@@ -1040,16 +1043,29 @@ def get_zone_trend():
 
     # Bulk-label all pings, then aggregate dwell per zone per month
     from collections import defaultdict
-    pings = [(r['latitude'], r['longitude']) for r in rows]
-    zone_labels = label_pings(pings, KNOWN_ZONES)
+
+    # Cache zone labels by cat — invalidated when ping count changes
+    cached = _zone_label_cache.get(internal_cat_id)
+    if cached is not None and cached['count'] == len(rows):
+        zone_labels = cached['labels']
+        timestamps_cached = cached['timestamps']
+    else:
+        pings = [(r['latitude'], r['longitude']) for r in rows]
+        zone_labels = label_pings(pings, KNOWN_ZONES)
+        timestamps_cached = [r['timestamp'] for r in rows]
+        _zone_label_cache[internal_cat_id] = {
+            'labels': zone_labels,
+            'timestamps': timestamps_cached,
+            'count': len(rows),
+        }
 
     month_zone_seconds2 = defaultdict(lambda: defaultdict(float))
     month_total_seconds2 = defaultdict(float)
     month_ping_counts2 = defaultdict(int)
 
-    for i in range(len(rows) - 1):
-        ts_cur = parse_ts(rows[i]['timestamp'])
-        ts_next = parse_ts(rows[i + 1]['timestamp'])
+    for i in range(len(timestamps_cached) - 1):
+        ts_cur = parse_ts(timestamps_cached[i])
+        ts_next = parse_ts(timestamps_cached[i + 1])
         month = ts_cur.strftime('%Y-%m')
         month_ping_counts2[month] += 1
 

@@ -31,7 +31,7 @@ const CAT_COLORS = {
 const ALL_CATS_SENTINEL = '__all__';
 
 const HistoryView = ({ catNames, knownZones }) => {
-    const [historyCat, setHistoryCat] = useState(catNames[0] || '');
+    const [historyCat, setHistoryCat] = useState(ALL_CATS_SENTINEL);
     const [windowSizeDays, setWindowSizeDays] = useState(7);
 
     // Slider: visual position updates immediately; debounced value triggers data fetches
@@ -66,6 +66,9 @@ const HistoryView = ({ catNames, knownZones }) => {
     // { Arthur: [...territories], King: [...], Trixie: [...] }
     const [allCatsTerritories, setAllCatsTerritories] = useState({});
     const [allCatsLoading, setAllCatsLoading] = useState(false);
+
+    // --- Record distance state ---
+    const [recordDistances, setRecordDistances] = useState({});
 
     // --- Zone dwell state ---
     const [dwellData, setDwellData] = useState([]);
@@ -230,6 +233,23 @@ const HistoryView = ({ catNames, knownZones }) => {
         };
         fetchOverlap();
     }, [trendLoading, arthurTrend, kingTrend]);
+
+    // Fetch record distances for all cats once on mount
+    useEffect(() => {
+        const allCats = ['Arthur', 'King', 'Trixie'];
+        Promise.all(
+            allCats.map(name =>
+                fetch(`${API_BASE_URL}/api/stats/farthest?cat_name=${encodeURIComponent(name)}`)
+                    .then(r => r.ok ? r.json() : null)
+                    .catch(() => null)
+                    .then(data => ({ name, data }))
+            )
+        ).then(results => {
+            const next = {};
+            results.forEach(({ name, data }) => { if (data) next[name] = data; });
+            setRecordDistances(next);
+        });
+    }, []);
 
     // Fetch zone dwell data whenever cat or date window changes
     useEffect(() => {
@@ -521,6 +541,32 @@ const HistoryView = ({ catNames, knownZones }) => {
             <div className="bg-white rounded-2xl shadow-lg p-4 md:p-6 mt-4 md:mt-6">
                 <h3 className="text-base md:text-xl font-bold text-gray-800 mb-2">Territory Overlap</h3>
                 {renderOverlapCard()}
+            </div>
+
+            {/* Record Distance from Home */}
+            <div className="bg-white rounded-2xl shadow-lg p-4 md:p-6 mt-4 md:mt-6">
+                <h3 className="text-base md:text-xl font-bold text-gray-800 mb-3 md:mb-4">Record Distance from Home</h3>
+                <div className="flex flex-wrap gap-4">
+                    {['Arthur', 'King', 'Trixie'].map(name => {
+                        const rec = recordDistances[name];
+                        const dateStr = rec && rec.timestamp
+                            ? new Date(rec.timestamp.replace(' ', 'T') + 'Z').toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
+                            : null;
+                        return (
+                            <div key={name} className="flex-1 min-w-40 bg-gray-50 rounded-xl px-4 py-3 border border-gray-100">
+                                <p className="text-xs font-semibold text-gray-500 mb-1">{name}</p>
+                                {rec && rec.distance_km !== null ? (
+                                    <>
+                                        <p className="text-xl font-bold text-gray-800">{rec.distance_km.toFixed(2)} km</p>
+                                        {dateStr && <p className="text-xs text-gray-400 mt-0.5">{dateStr}</p>}
+                                    </>
+                                ) : (
+                                    <p className="text-sm text-gray-400">No data</p>
+                                )}
+                            </div>
+                        );
+                    })}
+                </div>
             </div>
 
             {/* Zone Dwell Time */}

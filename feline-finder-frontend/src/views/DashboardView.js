@@ -1,40 +1,13 @@
-import React, { useState, useEffect } from 'react';
+import React from 'react';
 import {Play, Square} from 'lucide-react';
 import LoadingSpinner from '../components/LoadingSpinner';
 import ErrorDisplay from '../components/ErrorDisplay';
 import StatusCard from '../components/StatusCard';
 import EventLog from '../components/EventLog';
-import { API_BASE_URL } from '../constants';
-
-const ACTIVE_CATS = ['Arthur', 'King'];
-
-const formatRecordDate = (timestamp) => {
-    if (!timestamp) return null;
-    // timestamp is like "2025-04-25 08:43:33" (UTC)
-    const d = new Date(timestamp.replace(' ', 'T') + 'Z');
-    return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
-};
 
 const DashboardView = ({catsStatus, statusLoading, statusError, lastRefreshTime, autoRefresh, setAutoRefresh}) => {
     const catList = Object.values(catsStatus);
     const catCount = catList.length;
-
-    const [records, setRecords] = useState({});
-
-    useEffect(() => {
-        ACTIVE_CATS.forEach(async (catName) => {
-            try {
-                const res = await fetch(`${API_BASE_URL}/api/stats/farthest?cat_name=${encodeURIComponent(catName)}`);
-                if (!res.ok) return;
-                const data = await res.json();
-                if (data.distance_km !== null) {
-                    setRecords(prev => ({ ...prev, [catName]: data }));
-                }
-            } catch (e) {
-                // silently ignore — record card is optional
-            }
-        });
-    }, []); // fetch once on mount
 
     return (
         <div>
@@ -64,15 +37,6 @@ const DashboardView = ({catsStatus, statusLoading, statusError, lastRefreshTime,
                                             ⚠ Outside longer than usual
                                         </p>
                                     )}
-                                    {records[cat.name] && (
-                                        <div className="mt-2 bg-white rounded-xl shadow px-3 py-2 text-xs text-gray-500">
-                                            <span className="font-semibold text-gray-700">Record: </span>
-                                            {records[cat.name].distance_km.toFixed(2)} km
-                                            {formatRecordDate(records[cat.name].timestamp) && (
-                                                <span> · {formatRecordDate(records[cat.name].timestamp)}</span>
-                                            )}
-                                        </div>
-                                    )}
                                 </div>
                             ))}
                         </div>
@@ -96,17 +60,6 @@ const DashboardView = ({catsStatus, statusLoading, statusError, lastRefreshTime,
                                         <p className="text-sm font-semibold px-6 pb-3" style={{ color: '#F59E0B' }}>
                                             ⚠ Outside longer than usual
                                         </p>
-                                    )}
-                                    {records[cat.name] && (
-                                        <div className="mt-3 bg-white rounded-xl shadow px-4 py-2 text-sm text-gray-500 flex items-center justify-between">
-                                            <span className="font-semibold text-gray-700">Record distance from home</span>
-                                            <span className="font-mono text-gray-800">
-                                                {records[cat.name].distance_km.toFixed(2)} km
-                                                {formatRecordDate(records[cat.name].timestamp) && (
-                                                    <span className="font-sans font-normal text-gray-500 ml-1">· {formatRecordDate(records[cat.name].timestamp)}</span>
-                                                )}
-                                            </span>
-                                        </div>
                                     )}
                                 </div>
                                 <div className="bg-white rounded-2xl shadow-lg p-6">
