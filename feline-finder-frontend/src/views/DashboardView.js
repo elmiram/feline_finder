@@ -8,6 +8,13 @@ import { API_BASE_URL } from '../constants';
 
 const ACTIVE_CATS = ['Arthur', 'King'];
 
+const formatRecordDate = (timestamp) => {
+    if (!timestamp) return null;
+    // timestamp is like "2025-04-25 08:43:33" (UTC)
+    const d = new Date(timestamp.replace(' ', 'T') + 'Z');
+    return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+};
+
 const DashboardView = ({catsStatus, statusLoading, statusError, lastRefreshTime, autoRefresh, setAutoRefresh}) => {
     const catList = Object.values(catsStatus);
     const catCount = catList.length;
@@ -54,7 +61,10 @@ const DashboardView = ({catsStatus, statusLoading, statusError, lastRefreshTime,
                                     {records[cat.name] && (
                                         <div className="mt-2 bg-white rounded-xl shadow px-3 py-2 text-xs text-gray-500">
                                             <span className="font-semibold text-gray-700">Record: </span>
-                                            {records[cat.name].distance_km.toFixed(2)} km from home
+                                            {records[cat.name].distance_km.toFixed(2)} km
+                                            {formatRecordDate(records[cat.name].timestamp) && (
+                                                <span> · {formatRecordDate(records[cat.name].timestamp)}</span>
+                                            )}
                                         </div>
                                     )}
                                 </div>
@@ -79,7 +89,12 @@ const DashboardView = ({catsStatus, statusLoading, statusError, lastRefreshTime,
                                     {records[cat.name] && (
                                         <div className="mt-3 bg-white rounded-xl shadow px-4 py-2 text-sm text-gray-500 flex items-center justify-between">
                                             <span className="font-semibold text-gray-700">Record distance from home</span>
-                                            <span className="font-mono text-gray-800">{records[cat.name].distance_km.toFixed(2)} km</span>
+                                            <span className="font-mono text-gray-800">
+                                                {records[cat.name].distance_km.toFixed(2)} km
+                                                {formatRecordDate(records[cat.name].timestamp) && (
+                                                    <span className="font-sans font-normal text-gray-500 ml-1">· {formatRecordDate(records[cat.name].timestamp)}</span>
+                                                )}
+                                            </span>
                                         </div>
                                     )}
                                 </div>

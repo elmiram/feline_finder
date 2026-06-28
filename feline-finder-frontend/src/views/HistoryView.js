@@ -103,9 +103,9 @@ const HistoryView = ({ catNames, knownZones }) => {
                 const arthurJson = arthurRes.ok ? await arthurRes.json() : { trend: [] };
                 const kingJson = kingRes.ok ? await kingRes.json() : { trend: [] };
 
-                // Filter to monthly data only for a cleaner trend
-                setArthurTrend((arthurJson.trend || []).filter(t => t.period_type === 'month'));
-                setKingTrend((kingJson.trend || []).filter(t => t.period_type === 'month'));
+                // Show all available data (weekly until monthly backfill is complete)
+                setArthurTrend(arthurJson.trend || []);
+                setKingTrend(kingJson.trend || []);
             } catch (e) {
                 console.error('Failed to fetch territory trends:', e);
             } finally {
@@ -115,15 +115,25 @@ const HistoryView = ({ catNames, knownZones }) => {
         fetchTrends();
     }, []);
 
-    // Fetch overlap data for current month once on mount
+    // Fetch overlap data for the most recent weekly period (once trend data is loaded)
     useEffect(() => {
+        if (trendLoading) return;
+
         const fetchOverlap = async () => {
             setOverlapLoading(true);
-            const now = new Date();
-            const periodStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
+            // Find the most recent period_start across both cats' trend arrays
+            const allPeriods = [
+                ...arthurTrend.map(t => t.period_start),
+                ...kingTrend.map(t => t.period_start),
+            ].sort();
+            const periodStart = allPeriods[allPeriods.length - 1];
+            if (!periodStart) {
+                setOverlapLoading(false);
+                return;
+            }
             try {
                 const res = await fetch(
-                    `${API_BASE_URL}/api/territory/overlap?period_start=${periodStart}&period_type=month`
+                    `${API_BASE_URL}/api/territory/overlap?period_start=${periodStart}&period_type=week`
                 );
                 if (res.ok) {
                     const data = await res.json();
@@ -136,7 +146,7 @@ const HistoryView = ({ catNames, knownZones }) => {
             }
         };
         fetchOverlap();
-    }, []);
+    }, [trendLoading, arthurTrend, kingTrend]);
 
     // Handler for slider: update visual position immediately, debounce the data-triggering state
     const handleSliderChange = (e) => {
@@ -202,7 +212,7 @@ const HistoryView = ({ catNames, knownZones }) => {
                 beginAtZero: true,
             },
             x: {
-                title: { display: true, text: 'Month' },
+                title: { display: true, text: 'Period' },
             },
         },
     };
@@ -219,13 +229,13 @@ const HistoryView = ({ catNames, knownZones }) => {
         }
 
         if (!overlap) {
-            return <p className="text-gray-500 text-sm">No overlap data for current month</p>;
+            return <p className="text-gray-500 text-sm">No overlap data for current week</p>;
         }
 
         return (
             <p className="text-2xl font-bold text-purple-600">
                 {parseFloat(overlap.overlap_pct).toFixed(1)}%
-                <span className="text-sm font-normal text-gray-500 ml-2">Arthur ∩ King (current month)</span>
+                <span className="text-sm font-normal text-gray-500 ml-2">Arthur ∩ King (current week)</span>
             </p>
         );
     };
