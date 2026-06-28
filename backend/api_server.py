@@ -385,6 +385,181 @@ def reactivate_tracker():
         "message": "Tracker reactivated. Gap backfill running in background."
     })
 
+@app.route('/api/territory/trend')
+def get_territory_trend():
+    cat_name = request.args.get('cat_name')
+    if not cat_name:
+        return jsonify({"error": "cat_name is required"}), 400
+
+    conn = create_connection()
+    if not conn:
+        return jsonify({"error": "Database connection failed"}), 500
+
+    cursor = conn.cursor()
+    cursor.execute("SELECT internal_cat_id FROM cat_identities WHERE cat_name = ?", (cat_name,))
+    cat_row = cursor.fetchone()
+    if not cat_row:
+        conn.close()
+        return jsonify({"error": f"Cat '{cat_name}' not found"}), 404
+    internal_cat_id = cat_row['internal_cat_id']
+
+    cursor.execute("""
+        SELECT period_start, period_type, area_m2, area_change_pct
+        FROM cat_territories
+        WHERE internal_cat_id = ?
+        ORDER BY period_type, period_start
+    """, (internal_cat_id,))
+    rows = cursor.fetchall()
+    conn.close()
+
+    trend = [
+        {
+            "period_start": r['period_start'],
+            "period_type": r['period_type'],
+            "area_m2": r['area_m2'],
+            "area_change_pct": r['area_change_pct'],
+        }
+        for r in rows
+    ]
+    return jsonify({"cat_name": cat_name, "trend": trend})
+
+
+@app.route('/api/territory/weekly')
+def get_territory_weekly():
+    cat_name = request.args.get('cat_name')
+    if not cat_name:
+        return jsonify({"error": "cat_name is required"}), 400
+    try:
+        limit = int(request.args.get('limit', 52))
+    except ValueError:
+        limit = 52
+
+    conn = create_connection()
+    if not conn:
+        return jsonify({"error": "Database connection failed"}), 500
+
+    cursor = conn.cursor()
+    cursor.execute("SELECT internal_cat_id FROM cat_identities WHERE cat_name = ?", (cat_name,))
+    cat_row = cursor.fetchone()
+    if not cat_row:
+        conn.close()
+        return jsonify({"error": f"Cat '{cat_name}' not found"}), 404
+    internal_cat_id = cat_row['internal_cat_id']
+
+    cursor.execute("""
+        SELECT period_start, period_end, polygon_json, holes_json, area_m2, ping_count
+        FROM cat_territories
+        WHERE internal_cat_id = ? AND period_type = 'week'
+        ORDER BY period_start DESC
+        LIMIT ?
+    """, (internal_cat_id, limit))
+    rows = cursor.fetchall()
+    conn.close()
+
+    territories = [
+        {
+            "period_start": r['period_start'],
+            "period_end": r['period_end'],
+            "polygon_json": r['polygon_json'],
+            "holes_json": r['holes_json'],
+            "area_m2": r['area_m2'],
+            "ping_count": r['ping_count'],
+        }
+        for r in rows
+    ]
+    return jsonify({"cat_name": cat_name, "territories": territories})
+
+
+@app.route('/api/territory/overlap')
+def get_territory_overlap():
+    import json as _json
+    import math
+    import shapely.geometry
+
+    period_start = request.args.get('period_start')
+    period_type = request.args.get('period_type')
+    if not period_start or not period_type:
+        return jsonify({"error": "period_start and period_type are required"}), 400
+
+    conn = create_connection()
+    if not conn:
+        return jsonify({"error": "Database connection failed"}), 500
+
+    cursor = conn.cursor()
+
+    # Look up Arthur and King internal IDs
+    cat_ids = {}
+    for name in ('Arthur', 'King'):
+        cursor.execute("SELECT internal_cat_id FROM cat_identities WHERE cat_name = ?", (name,))
+        row = cursor.fetchone()
+        if row:
+            cat_ids[name] = row['internal_cat_id']
+
+    # Fetch territory rows for each cat
+    cat_data = {}
+    for name, internal_cat_id in cat_ids.items():
+        cursor.execute("""
+            SELECT polygon_json, holes_json, area_m2
+            FROM cat_territories
+            WHERE internal_cat_id = ? AND period_start = ? AND period_type = ?
+        """, (internal_cat_id, period_start, period_type))
+        row = cursor.fetchone()
+        if row:
+            cat_data[name] = dict(row)
+
+    conn.close()
+
+    missing = [name for name in ('Arthur', 'King') if name not in cat_data]
+
+    def build_shapely_poly(poly_json_str, holes_json_str):
+        outer = [tuple(pt) for pt in _json.loads(poly_json_str)]
+        holes = []
+        if holes_json_str:
+            for ring in _json.loads(holes_json_str):
+                holes.append([tuple(pt) for pt in ring])
+        return shapely.geometry.Polygon(outer, holes)
+
+    response = {
+        "period_start": period_start,
+        "period_type": period_type,
+        "arthur": None,
+        "king": None,
+        "overlap": None,
+        "missing": missing,
+    }
+
+    for name in ('Arthur', 'King'):
+        if name in cat_data:
+            d = cat_data[name]
+            response[name.lower()] = {
+                "area_m2": d['area_m2'],
+                "polygon_json": d['polygon_json'],
+                "holes_json": d['holes_json'],
+            }
+
+    if not missing:
+        arthur_poly = build_shapely_poly(cat_data['Arthur']['polygon_json'], cat_data['Arthur']['holes_json'])
+        king_poly = build_shapely_poly(cat_data['King']['polygon_json'], cat_data['King']['holes_json'])
+        intersection = arthur_poly.intersection(king_poly)
+
+        # Overlap percentage: ratio of intersection to smaller territory (in degree² — projection cancels)
+        overlap_pct = 0.0
+        if min(arthur_poly.area, king_poly.area) > 0:
+            overlap_pct = intersection.area / min(arthur_poly.area, king_poly.area) * 100
+
+        # Convert intersection area from degrees² to m² using local scale factor
+        cos_lat = math.cos(47.166 * math.pi / 180)
+        area_m2 = intersection.area * (111320 ** 2) * cos_lat
+
+        response['overlap'] = {
+            "area_m2": area_m2,
+            "overlap_pct": overlap_pct,
+            "geometry_json": _json.dumps(shapely.geometry.mapping(intersection)),
+        }
+
+    return jsonify(response)
+
+
 @app.route('/', defaults={'path': ''})
 @app.route('/<path:path>')
 def serve(path):
