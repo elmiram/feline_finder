@@ -167,6 +167,58 @@ def get_human_readable_address(lat, lon):
 app = Flask(__name__, static_folder='../feline-finder-frontend/build')
 CORS(app)
 
+# ---------------------------------------------------------------------------
+# Rolling P95 cache — computed once at startup, used by anomaly flag
+# ---------------------------------------------------------------------------
+
+def _compute_rolling_p95(conn, internal_cat_id, days):
+    """Return the 95th-percentile trip duration (minutes) over the last `days` days.
+
+    Returns None if fewer than 10 completed trips exist in the window.
+    """
+    cursor = conn.cursor()
+    cursor.execute(
+        """SELECT duration_minutes FROM cat_trips
+           WHERE internal_cat_id = ?
+             AND end_time IS NOT NULL
+             AND duration_minutes IS NOT NULL
+             AND duration_minutes <= 1440
+             AND start_time >= datetime('now', ?)
+           ORDER BY duration_minutes""",
+        (internal_cat_id, f'-{days} days'),
+    )
+    rows = cursor.fetchall()
+    durations = [r[0] for r in rows]
+    n = len(durations)
+    if n < 10:
+        return None
+    p95_idx = int(0.95 * n)
+    return durations[p95_idx]
+
+
+_rolling_p95 = {}  # {internal_cat_id: {'p95_28d': float|None, 'p95_7d': float|None}}
+
+
+def _refresh_rolling_p95():
+    conn = create_connection()
+    if not conn:
+        return
+    for cat_name in ['Arthur', 'King']:
+        row = conn.execute(
+            "SELECT internal_cat_id FROM cat_identities WHERE cat_name=?", (cat_name,)
+        ).fetchone()
+        if not row:
+            continue
+        cat_id = row[0]
+        _rolling_p95[cat_id] = {
+            'p95_28d': _compute_rolling_p95(conn, cat_id, 28),
+            'p95_7d': _compute_rolling_p95(conn, cat_id, 7),
+        }
+    conn.close()
+
+
+_refresh_rolling_p95()
+
 def get_latest_data_for_cats():
     conn = create_connection()
     if not conn: return None
@@ -187,6 +239,12 @@ def get_latest_data_for_cats():
         cats_data[cat_name]['tractive_position'] = cursor.fetchone()
         cursor.execute("SELECT latitude, longitude, timestamp FROM tractive_gps_positions WHERE internal_cat_id = ? ORDER BY timestamp DESC LIMIT 500", (internal_cat_id,))
         cats_data[cat_name]['recent_positions'] = [{'lat': r['latitude'], 'lon': r['longitude'], 'time': r['timestamp']} for r in cursor.fetchall()]
+        # Fetch open trip (end_time IS NULL) for anomaly detection
+        cursor.execute(
+            "SELECT start_time FROM cat_trips WHERE internal_cat_id = ? AND end_time IS NULL ORDER BY start_time DESC LIMIT 1",
+            (internal_cat_id,),
+        )
+        cats_data[cat_name]['open_trip'] = cursor.fetchone()
     conn.close()
     return cats_data
 
@@ -230,6 +288,61 @@ def run_confidence_engine(cats_data):
                 if address:
                     location_detail = f"Last seen {address}"
         zone_changes = get_recent_zone_changes(data.get('recent_positions', []))
+
+        # --- Compute current outdoor duration and anomaly flag ---
+        is_outside = status.lower().startswith('outside')
+        current_outdoor_duration_minutes = None
+
+        if is_outside:
+            # Prefer open trip start time from cat_trips
+            open_trip = data.get('open_trip')
+            trip_start_str = open_trip['start_time'] if open_trip else None
+
+            # Fallback: if no open trip, use last surepet exit timestamp
+            if trip_start_str is None and flap and flap['direction'] == 2:
+                trip_start_str = flap['timestamp']
+
+            # Fallback 2: use the last GPS ping time (cat is known outside)
+            if trip_start_str is None and pos:
+                trip_start_str = pos['timestamp']
+
+            if trip_start_str is not None:
+                try:
+                    # Parse trip start (strip timezone, treat as UTC naive)
+                    ts = trip_start_str.strip().rstrip('Z')
+                    for sep in ('+', '-'):
+                        idx = ts.rfind(sep, 10)
+                        if idx != -1 and len(ts) - idx == 6:
+                            ts = ts[:idx]
+                            break
+                    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S",
+                                "%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%dT%H:%M:%S.%f"):
+                        try:
+                            trip_start_dt = datetime.datetime.strptime(ts, fmt)
+                            break
+                        except ValueError:
+                            continue
+                    else:
+                        trip_start_dt = None
+                    if trip_start_dt:
+                        now_utc = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
+                        current_outdoor_duration_minutes = (now_utc - trip_start_dt).total_seconds() / 60.0
+                except Exception:
+                    pass
+
+        # Anomaly flag: only if both P95 windows agree and current duration exceeds both
+        long_absence_flag = False
+        internal_cat_id_for_flag = data.get('internal_id')
+        if (is_outside and current_outdoor_duration_minutes is not None
+                and internal_cat_id_for_flag is not None):
+            p95_data = _rolling_p95.get(internal_cat_id_for_flag, {})
+            p95_28d = p95_data.get('p95_28d')
+            p95_7d = p95_data.get('p95_7d')
+            if (p95_28d is not None and p95_7d is not None
+                    and current_outdoor_duration_minutes > p95_28d
+                    and current_outdoor_duration_minutes > p95_7d):
+                long_absence_flag = True
+
         final_status[cat_name] = {
             "name": cat_name, "status": status, "confidence": confidence,
             "evidence": evidence, "location": location, "location_detail": location_detail,
@@ -239,6 +352,8 @@ def run_confidence_engine(cats_data):
             "is_charging": hw['is_charging'] == 1 if hw else None,
             "recent_events": data.get('recent_events', []),
             "recent_zone_changes": zone_changes,
+            "current_outdoor_duration_minutes": round(current_outdoor_duration_minutes, 1) if current_outdoor_duration_minutes is not None else None,
+            "long_absence_flag": long_absence_flag,
         }
     return final_status
 
@@ -1219,6 +1334,77 @@ def get_activity_weather_correlation():
         }
         for row in rows
     ]
+    return jsonify(result)
+
+
+@app.route('/api/activity/survival')
+def get_activity_survival():
+    """Return the empirical survival curve P(duration > t) for a cat's outdoor trips.
+
+    Query params:
+      cat_name (required)
+
+    Returns a list of {minutes, probability} points sampled at:
+      every 5 min up to 120 min, every 15 min up to 360 min, every 30 min beyond.
+    """
+    cat_name = request.args.get('cat_name')
+    if not cat_name:
+        return jsonify({"error": "cat_name is required"}), 400
+
+    conn = create_connection()
+    if not conn:
+        return jsonify({"error": "Database connection failed"}), 500
+
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT internal_cat_id FROM cat_identities WHERE cat_name = ?", (cat_name,)
+    )
+    cat_row = cursor.fetchone()
+    if not cat_row:
+        conn.close()
+        return jsonify({"error": f"Cat '{cat_name}' not found"}), 404
+    internal_cat_id = cat_row['internal_cat_id']
+
+    cursor.execute(
+        """SELECT duration_minutes FROM cat_trips
+           WHERE internal_cat_id = ?
+             AND end_time IS NOT NULL
+             AND duration_minutes IS NOT NULL
+             AND duration_minutes <= 1440
+           ORDER BY duration_minutes""",
+        (internal_cat_id,),
+    )
+    rows = cursor.fetchall()
+    conn.close()
+
+    durations = [r['duration_minutes'] for r in rows]
+    n = len(durations)
+    if n == 0:
+        return jsonify([])
+
+    max_duration = int(durations[-1])
+
+    # Build sample points: every 5 min to 120, every 15 to 360, every 30 beyond
+    sample_points = []
+    t = 0
+    while t <= max_duration:
+        sample_points.append(t)
+        if t < 120:
+            t += 5
+        elif t < 360:
+            t += 15
+        else:
+            t += 30
+
+    # For each t: P(duration > t) = count(d > t) / n
+    # durations is sorted — use bisect for efficiency
+    import bisect
+    result = []
+    for t in sample_points:
+        # bisect_right gives index of first element > t
+        count_above = n - bisect.bisect_right(durations, t)
+        result.append({"minutes": t, "probability": round(count_above / n, 4)})
+
     return jsonify(result)
 
 

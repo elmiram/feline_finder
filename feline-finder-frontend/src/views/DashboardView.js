@@ -56,8 +56,14 @@ const DashboardView = ({catsStatus, statusLoading, statusError, lastRefreshTime,
                     <div className="sm:hidden">
                         <div className={`grid gap-3 mb-3 ${catCount >= 2 ? 'grid-cols-2' : 'grid-cols-1'}`}>
                             {catList.map(cat => (
-                                <div key={cat.name}>
+                                <div key={cat.name}
+                                     style={cat.long_absence_flag ? { border: '2px solid #F59E0B', borderRadius: '0.75rem' } : {}}>
                                     <StatusCard cat={cat} lastRefresh={lastRefreshTime}/>
+                                    {cat.long_absence_flag && (
+                                        <p className="text-xs font-semibold px-3 pb-2" style={{ color: '#F59E0B' }}>
+                                            ⚠ Outside longer than usual
+                                        </p>
+                                    )}
                                     {records[cat.name] && (
                                         <div className="mt-2 bg-white rounded-xl shadow px-3 py-2 text-xs text-gray-500">
                                             <span className="font-semibold text-gray-700">Record: </span>
@@ -84,8 +90,13 @@ const DashboardView = ({catsStatus, statusLoading, statusError, lastRefreshTime,
                     <div className={`hidden sm:grid gap-8 ${catCount >= 3 ? 'lg:grid-cols-2 xl:grid-cols-3' : catCount === 2 ? 'lg:grid-cols-2' : ''}`}>
                         {catList.map(cat => (
                             <div key={cat.name} className="flex flex-col gap-8">
-                                <div>
+                                <div style={cat.long_absence_flag ? { border: '2px solid #F59E0B', borderRadius: '0.75rem' } : {}}>
                                     <StatusCard cat={cat} lastRefresh={lastRefreshTime}/>
+                                    {cat.long_absence_flag && (
+                                        <p className="text-sm font-semibold px-6 pb-3" style={{ color: '#F59E0B' }}>
+                                            ⚠ Outside longer than usual
+                                        </p>
+                                    )}
                                     {records[cat.name] && (
                                         <div className="mt-3 bg-white rounded-xl shadow px-4 py-2 text-sm text-gray-500 flex items-center justify-between">
                                             <span className="font-semibold text-gray-700">Record distance from home</span>
