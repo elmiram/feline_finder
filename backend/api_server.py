@@ -1045,6 +1045,183 @@ def get_trips():
     return jsonify({"trips": trips, "stats": stats})
 
 
+@app.route('/api/activity/hourly')
+def get_activity_hourly():
+    """Return fraction of days in range where the cat was outside during each hour 0-23.
+
+    Query params:
+      cat_name   (required)
+      start_date (optional, defaults to 90 days ago)
+      end_date   (optional, defaults to now)
+    """
+    cat_name = request.args.get('cat_name')
+    start_date_str = request.args.get('start_date', '')
+    end_date_str = request.args.get('end_date', '')
+
+    if not cat_name:
+        return jsonify({"error": "cat_name is required"}), 400
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    if not end_date_str:
+        end_date_str = now.isoformat()
+    if not start_date_str:
+        start_date_str = (now - datetime.timedelta(days=90)).isoformat()
+
+    conn = create_connection()
+    if not conn:
+        return jsonify({"error": "Database connection failed"}), 500
+
+    cursor = conn.cursor()
+    cursor.execute("SELECT internal_cat_id FROM cat_identities WHERE cat_name = ?", (cat_name,))
+    cat_row = cursor.fetchone()
+    if not cat_row:
+        conn.close()
+        return jsonify({"error": f"Cat '{cat_name}' not found"}), 404
+    internal_cat_id = cat_row['internal_cat_id']
+
+    cursor.execute("""
+        SELECT start_time, end_time FROM cat_trips
+        WHERE internal_cat_id = ?
+          AND start_time >= ?
+          AND end_time <= ?
+          AND duration_minutes <= 1440
+          AND end_time IS NOT NULL
+    """, (internal_cat_id, start_date_str, end_date_str))
+    rows = cursor.fetchall()
+    conn.close()
+
+    def _parse_dt(s):
+        s = s.replace('Z', '+00:00')
+        try:
+            return datetime.datetime.fromisoformat(s)
+        except ValueError:
+            return datetime.datetime.fromisoformat(s[:26] + '+00:00')
+
+    # For each hour 0-23: set of distinct dates that had outdoor activity
+    hour_days = {h: set() for h in range(24)}
+    all_dates = set()
+
+    for row in rows:
+        start_dt = _parse_dt(row['start_time'])
+        end_dt = _parse_dt(row['end_time'])
+        all_dates.add(start_dt.date())
+        # Walk hour-by-hour from floor(start) to past end
+        cursor_dt = start_dt.replace(minute=0, second=0, microsecond=0)
+        while cursor_dt <= end_dt:
+            hour_days[cursor_dt.hour].add(cursor_dt.date())
+            cursor_dt += datetime.timedelta(hours=1)
+
+    total_days = len(all_dates) or 1
+
+    result = [
+        {"hour": h, "outdoor_fraction": round(len(hour_days[h]) / total_days, 4)}
+        for h in range(24)
+    ]
+    return jsonify(result)
+
+
+@app.route('/api/activity/seasonal')
+def get_activity_seasonal():
+    """Return daily outdoor hours across all history for a rolling trend line.
+
+    Query params:
+      cat_name (required)
+    """
+    cat_name = request.args.get('cat_name')
+    if not cat_name:
+        return jsonify({"error": "cat_name is required"}), 400
+
+    conn = create_connection()
+    if not conn:
+        return jsonify({"error": "Database connection failed"}), 500
+
+    cursor = conn.cursor()
+    cursor.execute("SELECT internal_cat_id FROM cat_identities WHERE cat_name = ?", (cat_name,))
+    cat_row = cursor.fetchone()
+    if not cat_row:
+        conn.close()
+        return jsonify({"error": f"Cat '{cat_name}' not found"}), 404
+    internal_cat_id = cat_row['internal_cat_id']
+
+    cursor.execute("""
+        SELECT start_time, end_time, duration_minutes FROM cat_trips
+        WHERE internal_cat_id = ?
+          AND end_time IS NOT NULL
+          AND duration_minutes <= 1440
+        ORDER BY start_time
+    """, (internal_cat_id,))
+    rows = cursor.fetchall()
+    conn.close()
+
+    # Group by date of start_time, sum duration_minutes
+    from collections import defaultdict
+    daily_minutes = defaultdict(float)
+    for row in rows:
+        date_str = row['start_time'][:10]  # YYYY-MM-DD
+        daily_minutes[date_str] += row['duration_minutes']
+
+    result = [
+        {"date": d, "outdoor_hours": round(mins / 60.0, 3)}
+        for d, mins in sorted(daily_minutes.items())
+    ]
+    return jsonify(result)
+
+
+@app.route('/api/activity/weather_correlation')
+def get_activity_weather_correlation():
+    """Join daily outdoor hours with weather data.
+
+    Query params:
+      cat_name (required)
+    """
+    cat_name = request.args.get('cat_name')
+    if not cat_name:
+        return jsonify({"error": "cat_name is required"}), 400
+
+    conn = create_connection()
+    if not conn:
+        return jsonify({"error": "Database connection failed"}), 500
+
+    cursor = conn.cursor()
+    cursor.execute("SELECT internal_cat_id FROM cat_identities WHERE cat_name = ?", (cat_name,))
+    cat_row = cursor.fetchone()
+    if not cat_row:
+        conn.close()
+        return jsonify({"error": f"Cat '{cat_name}' not found"}), 404
+    internal_cat_id = cat_row['internal_cat_id']
+
+    # Join cat daily outdoor hours with weather_daily in one query
+    cursor.execute("""
+        SELECT
+            DATE(t.start_time) AS trip_date,
+            SUM(t.duration_minutes) / 60.0 AS outdoor_hours,
+            w.temp_max,
+            w.precipitation,
+            w.weathercode
+        FROM cat_trips t
+        JOIN weather_daily w ON DATE(t.start_time) = w.date
+        WHERE t.internal_cat_id = ?
+          AND t.end_time IS NOT NULL
+          AND t.duration_minutes <= 1440
+        GROUP BY trip_date
+        ORDER BY trip_date
+    """, (internal_cat_id,))
+    rows = cursor.fetchall()
+    conn.close()
+
+    result = [
+        {
+            "date": row['trip_date'],
+            "outdoor_hours": round(row['outdoor_hours'], 3),
+            "temp_max": row['temp_max'],
+            "precipitation": row['precipitation'],
+            "weathercode": row['weathercode'],
+        }
+        for row in rows
+    ]
+    return jsonify(result)
+
+
 @app.route('/', defaults={'path': ''})
 @app.route('/<path:path>')
 def serve(path):

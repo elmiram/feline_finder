@@ -6,11 +6,12 @@ import {
     BarElement,
     PointElement,
     LineElement,
+    ScatterController,
     Title,
     Tooltip,
     Legend,
 } from 'chart.js';
-import { Line, Bar } from 'react-chartjs-2';
+import { Line, Bar, Scatter } from 'react-chartjs-2';
 import { API_BASE_URL } from '../constants';
 import { formatDate } from '../utils/time';
 import LoadingSpinner from '../components/LoadingSpinner';
@@ -18,7 +19,7 @@ import ErrorDisplay from '../components/ErrorDisplay';
 import TerritoryMap from '../components/TerritoryMap';
 import { ChevronDown } from 'lucide-react';
 
-ChartJS.register(CategoryScale, LinearScale, BarElement, PointElement, LineElement, Title, Tooltip, Legend);
+ChartJS.register(CategoryScale, LinearScale, BarElement, PointElement, LineElement, ScatterController, Title, Tooltip, Legend);
 
 // Colours shared between the trend chart and the all-cats territory legend
 const CAT_COLORS = {
@@ -73,10 +74,24 @@ const HistoryView = ({ catNames, knownZones }) => {
     const [trendModalData, setTrendModalData] = useState([]);
     const [trendModalLoading, setTrendModalLoading] = useState(false);
 
+    // --- Activity patterns state ---
+    const [patternCat, setPatternCat] = useState(catNames[0] || 'Arthur');
+    const [hourlyData, setHourlyData] = useState([]);
+    const [hourlyLoading, setHourlyLoading] = useState(false);
+    const [seasonalData, setSeasonalData] = useState([]);
+    const [seasonalLoading, setSeasonalLoading] = useState(false);
+    const [weatherCorrData, setWeatherCorrData] = useState([]);
+    const [weatherCorrLoading, setWeatherCorrLoading] = useState(false);
+
     const isAllCatsMode = historyCat === ALL_CATS_SENTINEL;
 
     // Effective cat for dwell (Arthur fallback when All Cats selected)
     const dwellCat = isAllCatsMode ? 'Arthur' : historyCat;
+
+    // Keep patternCat in sync with historyCat (except All Cats → Arthur)
+    useEffect(() => {
+        setPatternCat(isAllCatsMode ? 'Arthur' : historyCat);
+    }, [historyCat, isAllCatsMode]);
 
     // If user switches away from territory view while in All Cats mode, revert to single cat
     useEffect(() => {
@@ -244,6 +259,39 @@ const HistoryView = ({ catNames, knownZones }) => {
             .catch(() => setTrendModalData([]))
             .finally(() => setTrendModalLoading(false));
     }, [trendModalZone, dwellCat]);
+
+    // Fetch 24-hour activity fractions
+    useEffect(() => {
+        if (!patternCat) return;
+        setHourlyLoading(true);
+        fetch(`${API_BASE_URL}/api/activity/hourly?cat_name=${encodeURIComponent(patternCat)}`)
+            .then(r => r.ok ? r.json() : [])
+            .then(data => setHourlyData(Array.isArray(data) ? data : []))
+            .catch(() => setHourlyData([]))
+            .finally(() => setHourlyLoading(false));
+    }, [patternCat]);
+
+    // Fetch seasonal outdoor hours
+    useEffect(() => {
+        if (!patternCat) return;
+        setSeasonalLoading(true);
+        fetch(`${API_BASE_URL}/api/activity/seasonal?cat_name=${encodeURIComponent(patternCat)}`)
+            .then(r => r.ok ? r.json() : [])
+            .then(data => setSeasonalData(Array.isArray(data) ? data : []))
+            .catch(() => setSeasonalData([]))
+            .finally(() => setSeasonalLoading(false));
+    }, [patternCat]);
+
+    // Fetch weather correlation data
+    useEffect(() => {
+        if (!patternCat) return;
+        setWeatherCorrLoading(true);
+        fetch(`${API_BASE_URL}/api/activity/weather_correlation?cat_name=${encodeURIComponent(patternCat)}`)
+            .then(r => r.ok ? r.json() : [])
+            .then(data => setWeatherCorrData(Array.isArray(data) ? data : []))
+            .catch(() => setWeatherCorrData([]))
+            .finally(() => setWeatherCorrLoading(false));
+    }, [patternCat]);
 
     // Handler for slider: update visual position immediately, debounce the data-triggering state
     const handleSliderChange = (e) => {
@@ -530,6 +578,180 @@ const HistoryView = ({ catNames, knownZones }) => {
                         </>
                     );
                 })()}
+            </div>
+
+            {/* Activity Patterns */}
+            <div className="bg-white rounded-2xl shadow-lg p-4 md:p-6 mt-4 md:mt-6">
+                <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+                    <h3 className="text-base md:text-xl font-bold text-gray-800">Activity Patterns</h3>
+                    <div className="flex items-center gap-2">
+                        <label className="text-xs text-gray-600 font-medium">Cat:</label>
+                        <select
+                            value={patternCat}
+                            onChange={(e) => setPatternCat(e.target.value)}
+                            className="p-1.5 text-sm border border-gray-300 rounded-lg shadow-sm"
+                        >
+                            {catNames.map(name => <option key={name} value={name}>{name}</option>)}
+                        </select>
+                    </div>
+                </div>
+
+                {/* Chart 1: 24-Hour Activity */}
+                <div className="mb-8">
+                    <h4 className="text-sm font-semibold text-gray-700 mb-1">24-Hour Activity Pattern</h4>
+                    <p className="text-xs text-gray-500 mb-3">Fraction of days with outdoor activity each hour (last 90 days)</p>
+                    {hourlyLoading ? (
+                        <div className="flex items-center justify-center h-40 text-gray-400 text-sm">Loading...</div>
+                    ) : hourlyData.length === 0 ? (
+                        <div className="flex items-center justify-center h-40 text-gray-400 text-sm">No data available</div>
+                    ) : (
+                        <Bar
+                            data={{
+                                labels: hourlyData.map(d => `${d.hour}h`),
+                                datasets: [{
+                                    label: 'Fraction of days outside',
+                                    data: hourlyData.map(d => d.outdoor_fraction),
+                                    backgroundColor: '#38BDF8',
+                                    borderRadius: 3,
+                                }],
+                            }}
+                            options={{
+                                responsive: true,
+                                plugins: {
+                                    legend: { display: false },
+                                    tooltip: {
+                                        callbacks: {
+                                            label: (ctx) => `${(ctx.parsed.y * 100).toFixed(1)}% of days`,
+                                        },
+                                    },
+                                },
+                                scales: {
+                                    y: {
+                                        title: { display: true, text: 'Fraction of days' },
+                                        beginAtZero: true,
+                                        max: 1,
+                                    },
+                                    x: { title: { display: true, text: 'Hour of day' } },
+                                },
+                            }}
+                        />
+                    )}
+                </div>
+
+                {/* Chart 2: Seasonal Outdoor Hours */}
+                <div className="mb-8">
+                    <h4 className="text-sm font-semibold text-gray-700 mb-1">Seasonal Outdoor Hours</h4>
+                    <p className="text-xs text-gray-500 mb-3">Daily outdoor hours — 7-day rolling average</p>
+                    {seasonalLoading ? (
+                        <div className="flex items-center justify-center h-40 text-gray-400 text-sm">Loading...</div>
+                    ) : seasonalData.length === 0 ? (
+                        <div className="flex items-center justify-center h-40 text-gray-400 text-sm">No data available</div>
+                    ) : (() => {
+                        const smoothed = seasonalData.map((d, i) => {
+                            const window = seasonalData.slice(Math.max(0, i - 3), Math.min(seasonalData.length, i + 4));
+                            return window.reduce((s, x) => s + x.outdoor_hours, 0) / window.length;
+                        });
+                        const lineColor = CAT_COLORS[patternCat] || '#3B82F6';
+                        return (
+                            <Line
+                                data={{
+                                    labels: seasonalData.map(d => d.date),
+                                    datasets: [{
+                                        label: 'Outdoor hours (7-day avg)',
+                                        data: smoothed,
+                                        borderColor: lineColor,
+                                        backgroundColor: lineColor + '22',
+                                        tension: 0.3,
+                                        pointRadius: 0,
+                                        borderWidth: 2,
+                                    }],
+                                }}
+                                options={{
+                                    responsive: true,
+                                    plugins: {
+                                        legend: { display: false },
+                                        tooltip: {
+                                            callbacks: {
+                                                label: (ctx) => `${ctx.parsed.y.toFixed(2)}h`,
+                                            },
+                                        },
+                                    },
+                                    scales: {
+                                        y: {
+                                            title: { display: true, text: 'Hours per day' },
+                                            beginAtZero: true,
+                                        },
+                                        x: {
+                                            title: { display: true, text: 'Date' },
+                                            ticks: {
+                                                maxTicksLimit: 12,
+                                                maxRotation: 45,
+                                            },
+                                        },
+                                    },
+                                }}
+                            />
+                        );
+                    })()}
+                </div>
+
+                {/* Chart 3: Temperature vs Outdoor Hours */}
+                <div>
+                    <h4 className="text-sm font-semibold text-gray-700 mb-1">Temperature vs Outdoor Hours</h4>
+                    <p className="text-xs text-gray-500 mb-3">Each dot = one day. Colour = weather type.</p>
+                    {weatherCorrLoading ? (
+                        <div className="flex items-center justify-center h-40 text-gray-400 text-sm">Loading...</div>
+                    ) : weatherCorrData.length === 0 ? (
+                        <div className="flex items-center justify-center h-40 text-gray-400 text-sm">No data available</div>
+                    ) : (() => {
+                        const weatherBucket = (code) => {
+                            if (code <= 2) return { label: 'Clear', color: '#FBBF24' };
+                            if (code <= 49) return { label: 'Cloudy', color: '#9CA3AF' };
+                            if (code <= 79) return { label: 'Rain', color: '#60A5FA' };
+                            return { label: 'Storm/Snow', color: '#1E3A8A' };
+                        };
+                        const bucketNames = ['Clear', 'Cloudy', 'Rain', 'Storm/Snow'];
+                        const bucketColors = { Clear: '#FBBF24', Cloudy: '#9CA3AF', Rain: '#60A5FA', 'Storm/Snow': '#1E3A8A' };
+
+                        const grouped = {};
+                        bucketNames.forEach(b => { grouped[b] = []; });
+                        weatherCorrData.forEach(d => {
+                            const b = weatherBucket(d.weathercode);
+                            grouped[b.label].push({ x: d.temp_max, y: d.outdoor_hours });
+                        });
+
+                        const datasets = bucketNames
+                            .filter(b => grouped[b].length > 0)
+                            .map(b => ({
+                                label: b,
+                                data: grouped[b],
+                                backgroundColor: bucketColors[b] + 'CC',
+                                pointRadius: 4,
+                                pointHoverRadius: 6,
+                            }));
+
+                        return (
+                            <Scatter
+                                data={{ datasets }}
+                                options={{
+                                    responsive: true,
+                                    plugins: {
+                                        legend: { position: 'top' },
+                                        tooltip: {
+                                            callbacks: {
+                                                label: (ctx) => `${ctx.parsed.x.toFixed(1)}°C, ${ctx.parsed.y.toFixed(2)}h`,
+                                            },
+                                        },
+                                    },
+                                    scales: {
+                                        x: { title: { display: true, text: 'Max temperature (°C)' } },
+                                        y: { title: { display: true, text: 'Outdoor hours' }, beginAtZero: true },
+                                    },
+                                }}
+                            />
+                        );
+                    })()}
+                </div>
             </div>
 
             {/* Zone Trend Modal */}
