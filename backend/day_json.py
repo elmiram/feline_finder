@@ -394,6 +394,35 @@ def build_timelines(surepet_rows, gps_by_cat, zone_index, cats_map, users_map, i
             elif state == "inside":
                 timeline.append({"_start": ptr, "_end": now, "event": "At Home"})
 
+        # GPS fallback: if SurePet missed a flap exit, "At Home" segments may
+        # cover periods when the cat was actually outside. Detect this from GPS
+        # and split those segments into proper Outdoor Adventure entries.
+        corrected = []
+        for seg in timeline:
+            if seg.get("event") != "At Home":
+                corrected.append(seg)
+                continue
+            seg_gps = [p for p in gps if seg["_start"] <= p.t <= seg["_end"]]
+            outdoor = [p for p in seg_gps
+                       if zone_index.locate(p.lat, p.lon) not in (None, "Home")]
+            if not outdoor:
+                corrected.append(seg)
+                continue
+            out_start, out_end = outdoor[0].t, outdoor[-1].t
+            if out_start > seg["_start"]:
+                corrected.append({"_start": seg["_start"], "_end": out_start, "event": "At Home"})
+            dist, zones_seq = summarize_outdoor(seg_gps, zone_index)
+            corrected.append({
+                "_start": out_start, "_end": out_end,
+                "event": "Outdoor Adventure",
+                "distance_km": dist, "zones_visited": zones_seq,
+            })
+            standalone.append({"_ts": out_start, "event": "Went Outside"})
+            standalone.append({"_ts": out_end, "event": "Came Inside"})
+            if out_end < seg["_end"]:
+                corrected.append({"_start": out_end, "_end": seg["_end"], "event": "At Home"})
+        timeline = corrected
+
         merged = timeline + standalone
 
         def sort_key(item):
