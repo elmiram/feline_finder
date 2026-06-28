@@ -772,6 +772,200 @@ def delete_farthest_exclusion(exclusion_id):
     return jsonify({"status": "deleted"})
 
 
+@app.route('/api/zones/dwell')
+def get_zone_dwell():
+    import sys as _sys
+    import os as _os
+    _sys.path.insert(0, _os.path.dirname(__file__))
+    from zone_utils import label_pings
+
+    cat_name = request.args.get('cat_name')
+    start_date_str = request.args.get('start_date')
+    end_date_str = request.args.get('end_date')
+
+    if not cat_name:
+        return jsonify({"error": "cat_name is required"}), 400
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    if not end_date_str:
+        end_date_str = now.isoformat()
+    if not start_date_str:
+        start_date_str = (now - datetime.timedelta(days=30)).isoformat()
+
+    conn = create_connection()
+    if not conn:
+        return jsonify({"error": "Database connection failed"}), 500
+
+    cursor = conn.cursor()
+    cursor.execute("SELECT internal_cat_id FROM cat_identities WHERE cat_name = ?", (cat_name,))
+    cat_row = cursor.fetchone()
+    if not cat_row:
+        conn.close()
+        return jsonify({"error": f"Cat '{cat_name}' not found"}), 404
+    internal_cat_id = cat_row['internal_cat_id']
+
+    cursor.execute("""
+        SELECT latitude, longitude, timestamp FROM tractive_gps_positions
+        WHERE internal_cat_id = ?
+          AND timestamp >= ? AND timestamp <= ?
+          AND (sensor_used IS NULL OR sensor_used = 'GPS')
+        ORDER BY timestamp
+    """, (internal_cat_id, start_date_str, end_date_str))
+    rows = cursor.fetchall()
+    conn.close()
+
+    if not rows:
+        return jsonify([])
+
+    pings = [(r['latitude'], r['longitude']) for r in rows]
+    timestamps_raw = [r['timestamp'] for r in rows]
+
+    zone_labels = label_pings(pings, KNOWN_ZONES)
+
+    # Parse timestamps
+    def parse_ts(s):
+        s = s.replace('Z', '+00:00')
+        try:
+            return datetime.datetime.fromisoformat(s)
+        except ValueError:
+            # Fallback: strip trailing fractional seconds beyond 6 digits
+            return datetime.datetime.fromisoformat(s[:26])
+
+    timestamps = [parse_ts(t) for t in timestamps_raw]
+
+    # Accumulate dwell per zone using consecutive deltas
+    zone_seconds = {}
+    zone_visits = {}
+    prev_zone = None
+
+    for i in range(len(pings) - 1):
+        delta = (timestamps[i + 1] - timestamps[i]).total_seconds()
+        # Cap at 300 s (5 min) to avoid inflating dwell during GPS gaps
+        delta = min(delta, 300)
+        if delta <= 0:
+            continue
+
+        z = zone_labels[i]
+        if z is None:
+            prev_zone = None
+            continue
+
+        zone_seconds[z] = zone_seconds.get(z, 0) + delta
+
+        # Count visit: transition into zone
+        if z != prev_zone:
+            zone_visits[z] = zone_visits.get(z, 0) + 1
+
+        prev_zone = z
+
+    if not zone_seconds:
+        return jsonify([])
+
+    total_zone_seconds = sum(zone_seconds.values())
+
+    result = []
+    for zone_name, secs in zone_seconds.items():
+        minutes = secs / 60.0
+        visits = zone_visits.get(zone_name, 1)
+        result.append({
+            "zone_name": zone_name,
+            "total_minutes": round(minutes, 1),
+            "pct_of_total": round(secs / total_zone_seconds * 100, 1) if total_zone_seconds > 0 else 0,
+            "visit_count": visits,
+            "avg_visit_minutes": round(minutes / visits, 1) if visits > 0 else 0,
+        })
+
+    result.sort(key=lambda x: x['total_minutes'], reverse=True)
+    return jsonify(result)
+
+
+@app.route('/api/zones/trend')
+def get_zone_trend():
+    import sys as _sys
+    import os as _os
+    _sys.path.insert(0, _os.path.dirname(__file__))
+    from zone_utils import label_pings
+
+    cat_name = request.args.get('cat_name')
+    zone_name = request.args.get('zone_name')
+
+    if not cat_name or not zone_name:
+        return jsonify({"error": "cat_name and zone_name are required"}), 400
+
+    conn = create_connection()
+    if not conn:
+        return jsonify({"error": "Database connection failed"}), 500
+
+    cursor = conn.cursor()
+    cursor.execute("SELECT internal_cat_id FROM cat_identities WHERE cat_name = ?", (cat_name,))
+    cat_row = cursor.fetchone()
+    if not cat_row:
+        conn.close()
+        return jsonify({"error": f"Cat '{cat_name}' not found"}), 404
+    internal_cat_id = cat_row['internal_cat_id']
+
+    cursor.execute("""
+        SELECT latitude, longitude, timestamp FROM tractive_gps_positions
+        WHERE internal_cat_id = ?
+          AND (sensor_used IS NULL OR sensor_used = 'GPS')
+        ORDER BY timestamp
+    """, (internal_cat_id,))
+    rows = cursor.fetchall()
+    conn.close()
+
+    if not rows:
+        return jsonify([])
+
+    def parse_ts(s):
+        s = s.replace('Z', '+00:00')
+        try:
+            return datetime.datetime.fromisoformat(s)
+        except ValueError:
+            return datetime.datetime.fromisoformat(s[:26])
+
+    # Bulk-label all pings, then aggregate dwell per zone per month
+    from collections import defaultdict
+    pings = [(r['latitude'], r['longitude']) for r in rows]
+    zone_labels = label_pings(pings, KNOWN_ZONES)
+
+    month_zone_seconds2 = defaultdict(lambda: defaultdict(float))
+    month_total_seconds2 = defaultdict(float)
+    month_ping_counts2 = defaultdict(int)
+
+    for i in range(len(rows) - 1):
+        ts_cur = parse_ts(rows[i]['timestamp'])
+        ts_next = parse_ts(rows[i + 1]['timestamp'])
+        month = ts_cur.strftime('%Y-%m')
+        month_ping_counts2[month] += 1
+
+        delta = (ts_next - ts_cur).total_seconds()
+        delta = min(delta, 300)
+        if delta <= 0:
+            continue
+
+        z = zone_labels[i]
+        if z is not None:
+            month_zone_seconds2[month][z] += delta
+            month_total_seconds2[month] += delta
+
+    # Build result for requested zone_name — only months with >= 100 pings
+    result = []
+    for month in sorted(month_ping_counts2.keys()):
+        if month_ping_counts2[month] < 100:
+            continue
+        total = month_total_seconds2.get(month, 0)
+        if total <= 0:
+            continue
+        zone_secs = month_zone_seconds2[month].get(zone_name, 0)
+        pct = zone_secs / total * 100 if total > 0 else 0
+        result.append({
+            "month": month,
+            "pct_of_total": round(pct, 1),
+        })
+
+    return jsonify(result)
+
+
 @app.route('/', defaults={'path': ''})
 @app.route('/<path:path>')
 def serve(path):

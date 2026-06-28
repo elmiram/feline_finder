@@ -3,13 +3,14 @@ import {
     Chart as ChartJS,
     CategoryScale,
     LinearScale,
+    BarElement,
     PointElement,
     LineElement,
     Title,
     Tooltip,
     Legend,
 } from 'chart.js';
-import { Line } from 'react-chartjs-2';
+import { Line, Bar } from 'react-chartjs-2';
 import { API_BASE_URL } from '../constants';
 import { formatDate } from '../utils/time';
 import LoadingSpinner from '../components/LoadingSpinner';
@@ -17,7 +18,7 @@ import ErrorDisplay from '../components/ErrorDisplay';
 import TerritoryMap from '../components/TerritoryMap';
 import { ChevronDown } from 'lucide-react';
 
-ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend);
+ChartJS.register(CategoryScale, LinearScale, BarElement, PointElement, LineElement, Title, Tooltip, Legend);
 
 // Colours shared between the trend chart and the all-cats territory legend
 const CAT_COLORS = {
@@ -65,7 +66,17 @@ const HistoryView = ({ catNames, knownZones }) => {
     const [allCatsTerritories, setAllCatsTerritories] = useState({});
     const [allCatsLoading, setAllCatsLoading] = useState(false);
 
+    // --- Zone dwell state ---
+    const [dwellData, setDwellData] = useState([]);
+    const [dwellLoading, setDwellLoading] = useState(false);
+    const [trendModalZone, setTrendModalZone] = useState(null); // zone name string or null
+    const [trendModalData, setTrendModalData] = useState([]);
+    const [trendModalLoading, setTrendModalLoading] = useState(false);
+
     const isAllCatsMode = historyCat === ALL_CATS_SENTINEL;
+
+    // Effective cat for dwell (Arthur fallback when All Cats selected)
+    const dwellCat = isAllCatsMode ? 'Arthur' : historyCat;
 
     // If user switches away from territory view while in All Cats mode, revert to single cat
     useEffect(() => {
@@ -204,6 +215,35 @@ const HistoryView = ({ catNames, knownZones }) => {
         };
         fetchOverlap();
     }, [trendLoading, arthurTrend, kingTrend]);
+
+    // Fetch zone dwell data whenever cat or date window changes
+    useEffect(() => {
+        if (!dwellCat) return;
+        const endDate = historyEndDate;
+        const startDate = new Date(endDate.getTime() - windowSizeDays * 24 * 60 * 60 * 1000);
+        setDwellLoading(true);
+        fetch(
+            `${API_BASE_URL}/api/zones/dwell?cat_name=${encodeURIComponent(dwellCat)}&start_date=${startDate.toISOString()}&end_date=${endDate.toISOString()}`
+        )
+            .then(r => r.ok ? r.json() : [])
+            .then(data => setDwellData(Array.isArray(data) ? data : []))
+            .catch(() => setDwellData([]))
+            .finally(() => setDwellLoading(false));
+    }, [dwellCat, historyEndDate, windowSizeDays]);
+
+    // Fetch zone monthly trend when a bar is clicked
+    useEffect(() => {
+        if (!trendModalZone || !dwellCat) return;
+        setTrendModalLoading(true);
+        setTrendModalData([]);
+        fetch(
+            `${API_BASE_URL}/api/zones/trend?cat_name=${encodeURIComponent(dwellCat)}&zone_name=${encodeURIComponent(trendModalZone)}`
+        )
+            .then(r => r.ok ? r.json() : [])
+            .then(data => setTrendModalData(Array.isArray(data) ? data : []))
+            .catch(() => setTrendModalData([]))
+            .finally(() => setTrendModalLoading(false));
+    }, [trendModalZone, dwellCat]);
 
     // Handler for slider: update visual position immediately, debounce the data-triggering state
     const handleSliderChange = (e) => {
@@ -434,6 +474,119 @@ const HistoryView = ({ catNames, knownZones }) => {
                 <h3 className="text-base md:text-xl font-bold text-gray-800 mb-2">Territory Overlap</h3>
                 {renderOverlapCard()}
             </div>
+
+            {/* Zone Dwell Time */}
+            <div className="bg-white rounded-2xl shadow-lg p-4 md:p-6 mt-4 md:mt-6">
+                <h3 className="text-base md:text-xl font-bold text-gray-800 mb-1">Zone Dwell Time</h3>
+                {isAllCatsMode && (
+                    <p className="text-xs text-amber-600 mb-3">Zone dwell shown for Arthur (single-cat only)</p>
+                )}
+                {dwellLoading ? (
+                    <div className="flex items-center justify-center h-40 text-gray-400 text-sm">Loading dwell data...</div>
+                ) : dwellData.length === 0 ? (
+                    <div className="flex items-center justify-center h-40 text-gray-400 text-sm">No zone data for this window</div>
+                ) : (() => {
+                    const useHours = dwellData[0].total_minutes > 120;
+                    const barLabels = dwellData.map(z => z.zone_name);
+                    const barValues = dwellData.map(z => useHours ? +(z.total_minutes / 60).toFixed(2) : z.total_minutes);
+                    const dwellBarData = {
+                        labels: barLabels,
+                        datasets: [{
+                            label: useHours ? 'Hours' : 'Minutes',
+                            data: barValues,
+                            backgroundColor: '#3B82F6',
+                            borderRadius: 4,
+                        }],
+                    };
+                    const dwellBarOptions = {
+                        indexAxis: 'y',
+                        responsive: true,
+                        onClick: (_evt, elements) => {
+                            if (elements.length > 0) {
+                                const idx = elements[0].index;
+                                setTrendModalZone(dwellData[idx].zone_name);
+                            }
+                        },
+                        plugins: {
+                            legend: { display: false },
+                            tooltip: {
+                                callbacks: {
+                                    label: (ctx) => {
+                                        const z = dwellData[ctx.dataIndex];
+                                        return `${ctx.parsed.x} ${useHours ? 'h' : 'min'} · ${z.pct_of_total}% · ${z.visit_count} visit${z.visit_count !== 1 ? 's' : ''}`;
+                                    },
+                                },
+                            },
+                        },
+                        scales: {
+                            x: { title: { display: true, text: useHours ? 'Hours' : 'Minutes' }, beginAtZero: true },
+                            y: { ticks: { font: { size: 11 } } },
+                        },
+                    };
+                    return (
+                        <>
+                            <p className="text-xs text-gray-500 mb-3">Click a bar to see monthly trend</p>
+                            <Bar data={dwellBarData} options={dwellBarOptions} />
+                        </>
+                    );
+                })()}
+            </div>
+
+            {/* Zone Trend Modal */}
+            {trendModalZone && (
+                <div
+                    style={{ position: 'fixed', inset: 0, zIndex: 1000, backgroundColor: 'rgba(0,0,0,0.5)' }}
+                    onClick={() => setTrendModalZone(null)}
+                >
+                    <div
+                        className="bg-white rounded-2xl shadow-2xl p-6 mx-auto mt-20"
+                        style={{ maxWidth: 640, position: 'relative' }}
+                        onClick={e => e.stopPropagation()}
+                    >
+                        <button
+                            onClick={() => setTrendModalZone(null)}
+                            className="absolute top-4 right-4 text-gray-500 hover:text-gray-800 text-xl font-bold leading-none"
+                            aria-label="Close"
+                        >
+                            ×
+                        </button>
+                        <h3 className="text-lg font-bold text-gray-800 mb-1">{trendModalZone}</h3>
+                        <p className="text-xs text-gray-500 mb-4">Monthly % of tracked time — {dwellCat}</p>
+                        {trendModalLoading ? (
+                            <div className="flex items-center justify-center h-40 text-gray-400 text-sm">Loading...</div>
+                        ) : trendModalData.length === 0 ? (
+                            <div className="flex items-center justify-center h-40 text-gray-400 text-sm">No monthly data available</div>
+                        ) : (
+                            <Line
+                                data={{
+                                    labels: trendModalData.map(d => d.month),
+                                    datasets: [{
+                                        label: '% of tracked time',
+                                        data: trendModalData.map(d => d.pct_of_total),
+                                        borderColor: '#3B82F6',
+                                        backgroundColor: 'rgba(59,130,246,0.1)',
+                                        tension: 0.3,
+                                        pointRadius: 4,
+                                    }],
+                                }}
+                                options={{
+                                    responsive: true,
+                                    plugins: {
+                                        legend: { display: false },
+                                        tooltip: {
+                                            callbacks: { label: (ctx) => `${ctx.parsed.y}%` },
+                                        },
+                                    },
+                                    scales: {
+                                        y: { title: { display: true, text: '% of tracked time' }, beginAtZero: true },
+                                        x: { title: { display: true, text: 'Month' } },
+                                    },
+                                }}
+                            />
+                        )}
+                    </div>
+                </div>
+            )}
         </div>
     );
 };
