@@ -1,6 +1,155 @@
 import React, { useState, useEffect } from 'react';
 import { API_BASE_URL } from '../constants';
 
+const ACTIVE_CATS = ['Arthur', 'King'];
+
+function FarthestExclusionCard({ catName }) {
+    const [exclusions, setExclusions] = useState([]);
+    const [loading, setLoading] = useState(true);
+    const [dateFrom, setDateFrom] = useState('');
+    const [dateTo, setDateTo] = useState('');
+    const [reason, setReason] = useState('');
+    const [saving, setSaving] = useState(false);
+    const [message, setMessage] = useState(null);
+
+    const fetchExclusions = async () => {
+        setLoading(true);
+        try {
+            const res = await fetch(`${API_BASE_URL}/api/stats/farthest/exclusions?cat_name=${encodeURIComponent(catName)}`);
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const data = await res.json();
+            setExclusions(data.exclusions || []);
+        } catch (e) {
+            setMessage({ type: 'error', text: 'Could not load exclusions.' });
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    useEffect(() => { fetchExclusions(); }, [catName]); // eslint-disable-line react-hooks/exhaustive-deps
+
+    const handleAdd = async (e) => {
+        e.preventDefault();
+        if (!dateFrom || !dateTo) return;
+        setSaving(true);
+        setMessage(null);
+        try {
+            const res = await fetch(`${API_BASE_URL}/api/stats/farthest/exclusions?cat_name=${encodeURIComponent(catName)}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ date_from: dateFrom, date_to: dateTo, reason }),
+            });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            setDateFrom('');
+            setDateTo('');
+            setReason('');
+            await fetchExclusions();
+            setMessage({ type: 'success', text: 'Exclusion added.' });
+        } catch (e) {
+            setMessage({ type: 'error', text: e.message });
+        } finally {
+            setSaving(false);
+        }
+    };
+
+    const handleDelete = async (id) => {
+        setMessage(null);
+        try {
+            const res = await fetch(`${API_BASE_URL}/api/stats/farthest/exclusions/${id}`, { method: 'DELETE' });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            await fetchExclusions();
+        } catch (e) {
+            setMessage({ type: 'error', text: e.message });
+        }
+    };
+
+    return (
+        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-5 space-y-4">
+            <h3 className="text-lg font-bold text-gray-800">{catName}</h3>
+
+            {loading ? (
+                <p className="text-sm text-gray-400">Loading…</p>
+            ) : exclusions.length === 0 ? (
+                <p className="text-sm text-gray-400">No exclusions yet.</p>
+            ) : (
+                <table className="w-full text-sm">
+                    <thead>
+                        <tr className="text-xs font-semibold uppercase tracking-wide text-gray-400 border-b">
+                            <th className="text-left py-1">From</th>
+                            <th className="text-left py-1">To</th>
+                            <th className="text-left py-1">Reason</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {exclusions.map(ex => (
+                            <tr key={ex.id} className="border-b last:border-0">
+                                <td className="py-1.5 font-mono text-gray-700">{ex.date_from}</td>
+                                <td className="py-1.5 font-mono text-gray-700">{ex.date_to}</td>
+                                <td className="py-1.5 text-gray-500">{ex.reason || '—'}</td>
+                                <td className="py-1.5 text-right">
+                                    <button
+                                        onClick={() => handleDelete(ex.id)}
+                                        className="text-xs px-2 py-1 rounded bg-red-50 text-red-600 hover:bg-red-100 font-semibold transition-colors"
+                                    >
+                                        Delete
+                                    </button>
+                                </td>
+                            </tr>
+                        ))}
+                    </tbody>
+                </table>
+            )}
+
+            <form onSubmit={handleAdd} className="space-y-2 pt-2 border-t">
+                <p className="text-xs font-semibold uppercase tracking-wide text-gray-400">Add exclusion range</p>
+                <div className="flex gap-2">
+                    <div className="flex-1">
+                        <label className="text-xs text-gray-400">From</label>
+                        <input
+                            type="date"
+                            value={dateFrom}
+                            onChange={e => setDateFrom(e.target.value)}
+                            required
+                            className="w-full border border-gray-300 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+                        />
+                    </div>
+                    <div className="flex-1">
+                        <label className="text-xs text-gray-400">To</label>
+                        <input
+                            type="date"
+                            value={dateTo}
+                            onChange={e => setDateTo(e.target.value)}
+                            required
+                            className="w-full border border-gray-300 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+                        />
+                    </div>
+                </div>
+                <input
+                    type="text"
+                    value={reason}
+                    onChange={e => setReason(e.target.value)}
+                    placeholder="Reason (e.g. Vet visit)"
+                    className="w-full border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+                />
+                <button
+                    type="submit"
+                    disabled={saving || !dateFrom || !dateTo}
+                    className="w-full py-2 rounded-lg bg-blue-600 text-white text-sm font-semibold hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                >
+                    {saving ? 'Saving…' : 'Add'}
+                </button>
+            </form>
+
+            {message && (
+                <p className={`text-sm rounded-lg px-3 py-2 ${message.type === 'success' ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}>
+                    {message.text}
+                </p>
+            )}
+        </div>
+    );
+}
+
 function TrackerBadge({ tracker }) {
     return (
         <div className={`flex items-center justify-between rounded-lg px-3 py-2 text-sm ${tracker.active ? 'bg-green-50 border border-green-200' : 'bg-gray-50 border border-gray-200'}`}>
@@ -187,24 +336,40 @@ export default function SettingsView() {
     if (error) return <p className="text-red-500 text-center py-12">{error}</p>;
 
     return (
-        <div className="space-y-6">
-            <div>
-                <h2 className="text-xl font-bold text-gray-700">Tracker Management</h2>
-                <p className="text-sm text-gray-400 mt-1">
-                    Assign a new tracker ID when a collar is replaced, or re-activate a recovered one.
-                    Historical GPS data is fetched automatically in the background.
-                </p>
+        <div className="space-y-10">
+            <div className="space-y-6">
+                <div>
+                    <h2 className="text-xl font-bold text-gray-700">Tracker Management</h2>
+                    <p className="text-sm text-gray-400 mt-1">
+                        Assign a new tracker ID when a collar is replaced, or re-activate a recovered one.
+                        Historical GPS data is fetched automatically in the background.
+                    </p>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+                    {Object.entries(trackerData).map(([catName, data]) => (
+                        <CatTrackerCard
+                            key={catName}
+                            catName={catName}
+                            data={data}
+                            onAssign={handleAssign}
+                            onReactivate={handleReactivate}
+                        />
+                    ))}
+                </div>
             </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-                {Object.entries(trackerData).map(([catName, data]) => (
-                    <CatTrackerCard
-                        key={catName}
-                        catName={catName}
-                        data={data}
-                        onAssign={handleAssign}
-                        onReactivate={handleReactivate}
-                    />
-                ))}
+
+            <div className="space-y-6">
+                <div>
+                    <h2 className="text-xl font-bold text-gray-700">Farthest Point Exclusions</h2>
+                    <p className="text-sm text-gray-400 mt-1">
+                        Exclude date ranges from the farthest-point-from-home calculation — e.g. vet visits that would otherwise dominate the stat.
+                    </p>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+                    {ACTIVE_CATS.map(catName => (
+                        <FarthestExclusionCard key={catName} catName={catName} />
+                    ))}
+                </div>
             </div>
         </div>
     );

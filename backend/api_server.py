@@ -5,6 +5,7 @@
 # It now uses DBSCAN for clustering to remove outliers before computing the territory polygon.
 
 import os
+import math
 import datetime
 import requests
 import numpy as np
@@ -29,6 +30,17 @@ from tractive_backfill import run_backfill_in_background
 #     ],
 # }
 from config import KNOWN_ZONES
+
+# --- Farthest-point constants (home centroid, computed from KNOWN_ZONES["Home"] polygon) ---
+HOME_LAT = 47.166391786
+HOME_LON = 8.629922381
+
+def _haversine_km(lat1, lon1, lat2, lon2):
+    R = 6371.0
+    dlat = math.radians(lat2 - lat1)
+    dlon = math.radians(lon2 - lon1)
+    a = math.sin(dlat/2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon/2)**2
+    return R * 2 * math.asin(math.sqrt(a))
 
 # --- New Helper Functions ---
 
@@ -624,6 +636,140 @@ def get_gps_heatmap():
         cells.append({"lat": centroid_lat, "lon": centroid_lon, "count": count})
 
     return jsonify({"cells": cells, "max_count": max_count})
+
+
+@app.route('/api/stats/farthest')
+def get_farthest_point():
+    cat_name = request.args.get('cat_name')
+    if not cat_name:
+        return jsonify({"error": "cat_name is required"}), 400
+
+    conn = create_connection()
+    if not conn:
+        return jsonify({"error": "Database connection failed"}), 500
+
+    cursor = conn.cursor()
+    cursor.execute("SELECT internal_cat_id FROM cat_identities WHERE cat_name = ?", (cat_name,))
+    cat_row = cursor.fetchone()
+    if not cat_row:
+        conn.close()
+        return jsonify({"error": f"Cat '{cat_name}' not found"}), 404
+    internal_cat_id = cat_row['internal_cat_id']
+
+    cursor.execute("""
+        SELECT date_from, date_to FROM farthest_point_exclusions
+        WHERE internal_cat_id = ?
+    """, (internal_cat_id,))
+    exclusions = [(row['date_from'], row['date_to']) for row in cursor.fetchall()]
+
+    cursor.execute("""
+        SELECT latitude, longitude, timestamp FROM tractive_gps_positions
+        WHERE internal_cat_id = ? AND (sensor_used IS NULL OR sensor_used = 'GPS')
+    """, (internal_cat_id,))
+    rows = cursor.fetchall()
+    conn.close()
+
+    best_dist = -1
+    best_row = None
+    for row in rows:
+        ts = row['timestamp']
+        ping_date = ts[:10]  # YYYY-MM-DD
+        excluded = any(df <= ping_date <= dt for df, dt in exclusions)
+        if excluded:
+            continue
+        dist = _haversine_km(HOME_LAT, HOME_LON, row['latitude'], row['longitude'])
+        if dist > best_dist:
+            best_dist = dist
+            best_row = row
+
+    if best_row is None:
+        return jsonify({"distance_km": None, "lat": None, "lon": None, "timestamp": None})
+
+    return jsonify({
+        "distance_km": round(best_dist, 4),
+        "lat": best_row['latitude'],
+        "lon": best_row['longitude'],
+        "timestamp": best_row['timestamp'],
+    })
+
+
+@app.route('/api/stats/farthest/exclusions', methods=['GET'])
+def get_farthest_exclusions():
+    cat_name = request.args.get('cat_name')
+    if not cat_name:
+        return jsonify({"error": "cat_name is required"}), 400
+
+    conn = create_connection()
+    if not conn:
+        return jsonify({"error": "Database connection failed"}), 500
+
+    cursor = conn.cursor()
+    cursor.execute("SELECT internal_cat_id FROM cat_identities WHERE cat_name = ?", (cat_name,))
+    cat_row = cursor.fetchone()
+    if not cat_row:
+        conn.close()
+        return jsonify({"error": f"Cat '{cat_name}' not found"}), 404
+    internal_cat_id = cat_row['internal_cat_id']
+
+    cursor.execute("""
+        SELECT id, date_from, date_to, reason FROM farthest_point_exclusions
+        WHERE internal_cat_id = ?
+        ORDER BY date_from
+    """, (internal_cat_id,))
+    exclusions = [
+        {"id": r['id'], "date_from": r['date_from'], "date_to": r['date_to'], "reason": r['reason']}
+        for r in cursor.fetchall()
+    ]
+    conn.close()
+    return jsonify({"exclusions": exclusions})
+
+
+@app.route('/api/stats/farthest/exclusions', methods=['POST'])
+def add_farthest_exclusion():
+    cat_name = request.args.get('cat_name')
+    if not cat_name:
+        return jsonify({"error": "cat_name is required"}), 400
+
+    body = request.get_json()
+    date_from = body.get('date_from')
+    date_to = body.get('date_to')
+    reason = body.get('reason', '')
+    if not date_from or not date_to:
+        return jsonify({"error": "date_from and date_to are required"}), 400
+
+    conn = create_connection()
+    if not conn:
+        return jsonify({"error": "Database connection failed"}), 500
+
+    cursor = conn.cursor()
+    cursor.execute("SELECT internal_cat_id FROM cat_identities WHERE cat_name = ?", (cat_name,))
+    cat_row = cursor.fetchone()
+    if not cat_row:
+        conn.close()
+        return jsonify({"error": f"Cat '{cat_name}' not found"}), 404
+    internal_cat_id = cat_row['internal_cat_id']
+
+    cursor.execute("""
+        INSERT INTO farthest_point_exclusions (internal_cat_id, date_from, date_to, reason)
+        VALUES (?, ?, ?, ?)
+    """, (internal_cat_id, date_from, date_to, reason))
+    conn.commit()
+    new_id = cursor.lastrowid
+    conn.close()
+    return jsonify({"id": new_id, "status": "created"}), 201
+
+
+@app.route('/api/stats/farthest/exclusions/<int:exclusion_id>', methods=['DELETE'])
+def delete_farthest_exclusion(exclusion_id):
+    conn = create_connection()
+    if not conn:
+        return jsonify({"error": "Database connection failed"}), 500
+
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM farthest_point_exclusions WHERE id = ?", (exclusion_id,))
+    conn.commit()
+    conn.close()
+    return jsonify({"status": "deleted"})
 
 
 @app.route('/', defaults={'path': ''})
